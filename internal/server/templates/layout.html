@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -7,6 +8,7 @@
     <link rel="stylesheet" href="/static/css/style.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
+
 <body>
     <div class="app-container">
         <aside class="sidebar" id="sidebar">
@@ -18,29 +20,42 @@
                 <button class="btn btn-ghost btn-sm" id="refreshBtn">🔄 Update Feeds</button>
             </div>
             <nav class="sidebar-nav">
-                <a href="/" class="nav-item {{if and (not .CurrentFeedID) (not .CurrentFolderID)}}active{{end}}">🏠 All Items</a>
+                <a href="/" class="nav-item {{if and (not .CurrentFeedID) (not .CurrentFolderID)}}active{{end}}">🏠 All
+                    Items</a>
                 {{range .FoldersWithFeeds}}
                 <div class="folder" data-folder-id="{{.ID}}">
-                    <a href="/folder/{{.ID}}" class="folder-toggle {{if eq $.CurrentFolderID .ID}}active{{end}}" data-folder-id="{{.ID}}">📁 {{.Name}}</a>
+                    <a href="/folder/{{.ID}}" class="folder-toggle {{if eq $.CurrentFolderID .ID}}active{{end}}"
+                        data-folder-id="{{.ID}}">📁 {{.Name}}</a>
                     <div class="folder-feeds drop-zone" id="folder-{{.ID}}" data-folder-id="{{.ID}}">
-                        {{range .Feeds}}<a href="/feed/{{.ID}}" class="nav-item feed-item {{if eq $.CurrentFeedID .ID}}active{{end}}" data-feed-id="{{.ID}}" draggable="true">📰 {{.Title}}</a>{{end}}
+                        {{range .Feeds}}<a href="/feed/{{.ID}}"
+                            class="nav-item feed-item {{if eq $.CurrentFeedID .ID}}active{{end}}{{if .LastError}} feed-error{{end}}"
+                            data-feed-id="{{.ID}}" draggable="true">📰 {{.Title}}</a>{{end}}
                     </div>
                 </div>
                 {{end}}
                 <div class="unfiled-feeds drop-zone" data-folder-id="0">
-                {{range .UnfiledFeeds}}<a href="/feed/{{.ID}}" class="nav-item feed-item {{if eq $.CurrentFeedID .ID}}active{{end}}" data-feed-id="{{.ID}}" draggable="true">📰 {{.Title}}</a>{{end}}
+                    {{range .UnfiledFeeds}}<a href="/feed/{{.ID}}"
+                        class="nav-item feed-item {{if eq $.CurrentFeedID .ID}}active{{end}}{{if .LastError}} feed-error{{end}}"
+                        data-feed-id="{{.ID}}" draggable="true">📰 {{.Title}}</a>{{end}}
                 </div>
             </nav>
         </aside>
         <main class="main-content">
             <header class="main-header">
                 <button class="sidebar-toggle" id="sidebarToggle">☰</button>
-                <h2>{{.PageTitle}}</h2>
+                <h2>{{.PageTitle}}{{if .FeedError}} <span class="feed-error-badge">({{.FeedError}})</span>{{end}}</h2>
             </header>
             <div class="items-container" id="itemsContainer">
-                {{if not .Items}}<div class="empty-state"><div class="empty-icon">📭</div><h3>No items yet</h3><p>Import an OPML file and click "Update Feeds" to get started.</p></div>
+                {{if not .Items}}<div class="empty-state">
+                    <div class="empty-icon">📭</div>
+                    <h3>No items yet</h3>
+                    <p>Import an OPML file and click "Update Feeds" to get started.</p>
+                </div>
                 {{else}}{{range .Items}}<article class="item {{if not .IsRead}}unread{{end}}" data-item-id="{{.ID}}">
-                    <div class="item-header"><h3 class="item-title"><a href="{{.Link}}" target="_blank">{{.Title}}</a></h3><span class="item-time">{{timeAgo .PublishedAt}}</span></div>
+                    <div class="item-header">
+                        <h3 class="item-title"><a href="{{.Link}}" target="_blank">{{.Title}}</a></h3><span
+                            class="item-time">{{timeAgo .PublishedAt}}</span>
+                    </div>
                     <div class="item-content">{{safeHTML .Content}}</div>
                 </article>{{end}}{{end}}
             </div>
@@ -48,28 +63,40 @@
     </div>
     <div class="modal-overlay" id="settingsModal">
         <div class="modal">
-            <div class="modal-header"><h2>Settings</h2><button class="modal-close" id="closeSettings">&times;</button></div>
+            <div class="modal-header">
+                <h2>Settings</h2><button class="modal-close" id="closeSettings">&times;</button>
+            </div>
             <div class="modal-body">
-                <div class="form-group"><label>Polling Interval (min, ≥15)</label><input type="number" id="pollingInterval" min="15" value="{{.PollingInterval}}"></div>
-                <div class="form-group"><label>Import OPML</label><input type="file" id="opmlFile" accept=".opml,.xml"><button class="btn btn-secondary" id="importBtn">Import</button></div>
-                <div class="form-group"><label>Export OPML</label><a href="/api/export-opml" class="btn btn-secondary" download>Export</a></div>
+                <div class="form-group"><button class="btn btn-primary" id="addFeedSettingsBtn">➕ Add Feed</button>
+                </div>
+                <div class="form-group"><label>Polling Interval (min, ≥15)</label><input type="number"
+                        id="pollingInterval" min="15" value="{{.PollingInterval}}"></div>
+                <div class="form-group"><label>Import OPML</label><input type="file" id="opmlFile"
+                        accept=".opml,.xml"><button class="btn btn-secondary" id="importBtn">Import</button></div>
+                <div class="form-group"><label>Export OPML</label><a href="/api/export-opml" class="btn btn-secondary"
+                        download>Export</a></div>
                 <div class="form-group"><button class="btn btn-danger" id="cleanupBtn">Delete Read Items</button></div>
             </div>
             <div class="modal-footer"><button class="btn btn-primary" id="saveSettings">Save</button></div>
         </div>
     </div>
-    <div class="toast" id="toast"><span class="toast-icon">⏳</span><span id="toastMessage">Processing...</span><div class="toast-progress" id="toastProgress"></div></div>
+    <div class="toast" id="toast"><span class="toast-icon">⏳</span><span id="toastMessage">Processing...</span>
+        <div class="toast-progress" id="toastProgress"></div>
+    </div>
     <div class="context-menu" id="feedContextMenu">
         <button class="context-menu-item" id="updateFeedBtn">🔄 Update Feed</button>
         <button class="context-menu-item" id="deleteFeedBtn">🗑️ Remove Feed</button>
     </div>
     <div class="context-menu" id="folderContextMenu">
+        <button class="context-menu-item" id="addFeedFolderBtn">➕ Add Feed</button>
         <button class="context-menu-item" id="updateFolderBtn">🔄 Update Folder</button>
         <button class="context-menu-item" id="deleteFolderBtn">🗑️ Delete Folder</button>
     </div>
     <div class="modal-overlay" id="confirmModal">
         <div class="modal">
-            <div class="modal-header"><h2>Confirm Delete</h2><button class="modal-close" id="closeConfirm">&times;</button></div>
+            <div class="modal-header">
+                <h2>Confirm Delete</h2><button class="modal-close" id="closeConfirm">&times;</button>
+            </div>
             <div class="modal-body">
                 <p id="confirmMessage">Are you sure you want to delete this folder and all its feeds?</p>
             </div>
@@ -79,6 +106,20 @@
             </div>
         </div>
     </div>
+    <div class="modal-overlay" id="addFeedModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h2>Add Feed</h2><button class="modal-close" id="closeAddFeed">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group"><label>Feed URL</label><input type="url" id="feedUrlInput"
+                        placeholder="https://example.com/feed.xml"></div>
+                <input type="hidden" id="addFeedFolderId" value="">
+            </div>
+            <div class="modal-footer"><button class="btn btn-primary" id="submitAddFeed">Add Feed</button></div>
+        </div>
+    </div>
     <script src="/static/js/app.js"></script>
 </body>
+
 </html>

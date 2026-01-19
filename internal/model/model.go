@@ -18,6 +18,8 @@ type Feed struct {
 	URL         string
 	IconURL     string
 	LastFetched time.Time
+	LastError   string // stores last fetch error, empty if successful
+	ItemCount   int    // number of items in feed (for UI warning display)
 }
 
 // Item represents a single article/entry from a feed.

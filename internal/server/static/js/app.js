@@ -29,6 +29,15 @@
     const confirmYes = document.getElementById('confirmYes');
     const confirmMessage = document.getElementById('confirmMessage');
 
+    // Add Feed modal
+    const addFeedModal = document.getElementById('addFeedModal');
+    const closeAddFeed = document.getElementById('closeAddFeed');
+    const feedUrlInput = document.getElementById('feedUrlInput');
+    const addFeedFolderId = document.getElementById('addFeedFolderId');
+    const submitAddFeed = document.getElementById('submitAddFeed');
+    const addFeedSettingsBtn = document.getElementById('addFeedSettingsBtn');
+    const addFeedFolderBtn = document.getElementById('addFeedFolderBtn');
+
     // Sidebar toggle (mobile)
     if (sidebarToggle) sidebarToggle.onclick = () => sidebar.classList.toggle('open');
 
@@ -233,6 +242,81 @@
     if (closeSettings) closeSettings.onclick = () => settingsModal.classList.remove('active');
     settingsModal?.addEventListener('click', e => { if (e.target === settingsModal) settingsModal.classList.remove('active'); });
 
+    // Add Feed modal helpers
+    function openAddFeedModal(folderId = null) {
+        if (addFeedFolderId) addFeedFolderId.value = folderId || '';
+        if (feedUrlInput) feedUrlInput.value = '';
+        addFeedModal?.classList.add('active');
+        feedUrlInput?.focus();
+    }
+
+    function closeAddFeedModal() {
+        addFeedModal?.classList.remove('active');
+    }
+
+    // Add Feed from settings menu (no folder)
+    if (addFeedSettingsBtn) {
+        addFeedSettingsBtn.onclick = () => {
+            settingsModal?.classList.remove('active');
+            openAddFeedModal(null);
+        };
+    }
+
+    // Add Feed from folder context menu
+    if (addFeedFolderBtn) {
+        addFeedFolderBtn.onclick = () => {
+            if (!contextFolderId) return;
+            const folderId = contextFolderId; // Save before hide clears it
+            hideAllContextMenus();
+            openAddFeedModal(folderId);
+        };
+    }
+
+    // Add Feed modal close handlers
+    if (closeAddFeed) closeAddFeed.onclick = closeAddFeedModal;
+    addFeedModal?.addEventListener('click', e => { if (e.target === addFeedModal) closeAddFeedModal(); });
+
+    // Submit Add Feed
+    if (submitAddFeed) {
+        submitAddFeed.onclick = async () => {
+            const url = feedUrlInput?.value?.trim();
+            if (!url) {
+                showToast('Please enter a feed URL');
+                return;
+            }
+
+            const folderId = addFeedFolderId?.value ? parseInt(addFeedFolderId.value, 10) : null;
+            closeAddFeedModal();
+            showToast('Adding feed...', 10000);
+
+            try {
+                const res = await fetch('/api/feed', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url, folder_id: folderId })
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    showToast(data.is_new ? 'Feed added! Updating...' : 'Feed already exists');
+                    if (data.is_new) {
+                        // Fetch the new feed immediately
+                        await fetch(`/api/refresh-feed/${data.feed_id}`, { method: 'POST' });
+                    }
+                    setTimeout(() => location.reload(), 500);
+                } else {
+                    showToast(data.error || 'Failed to add feed');
+                }
+            } catch (e) {
+                showToast('Error adding feed');
+            }
+        };
+    }
+
+    // Allow Enter key to submit
+    feedUrlInput?.addEventListener('keypress', e => {
+        if (e.key === 'Enter') submitAddFeed?.click();
+    });
+
     // Toast helper
     function showToast(msg, duration = 3000) {
         toastMessage.textContent = msg;
@@ -307,6 +391,37 @@
     // Drag and drop for feeds
     let draggedFeed = null;
 
+    // Helper to move feed to folder
+    async function moveFeedToFolder(feedId, targetFolderId) {
+        // Don't move if dropped in same folder
+        const currentFolder = draggedFeed?.closest('.drop-zone');
+        if (currentFolder && currentFolder.dataset.folderId === targetFolderId) return;
+
+        showToast('Moving feed...');
+        try {
+            const res = await fetch(`/api/feed/${feedId}/move`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ folder_id: targetFolderId === '0' ? null : parseInt(targetFolderId, 10) })
+            });
+            if (res.ok) {
+                showToast('Feed moved');
+                setTimeout(() => location.reload(), 500);
+            } else {
+                const data = await res.json();
+                showToast(data.error || 'Failed to move feed');
+            }
+        } catch (e) {
+            showToast('Error moving feed');
+        }
+    }
+
+    // Clear all drag-over styles
+    function clearDragStyles() {
+        document.querySelectorAll('.drop-zone').forEach(z => z.classList.remove('drag-over'));
+        document.querySelectorAll('.folder').forEach(f => f.classList.remove('drag-over'));
+    }
+
     document.querySelectorAll('.feed-item[draggable="true"]').forEach(feedItem => {
         feedItem.addEventListener('dragstart', (e) => {
             draggedFeed = feedItem;
@@ -318,10 +433,11 @@
         feedItem.addEventListener('dragend', () => {
             feedItem.classList.remove('dragging');
             draggedFeed = null;
-            document.querySelectorAll('.drop-zone').forEach(z => z.classList.remove('drag-over'));
+            clearDragStyles();
         });
     });
 
+    // Handle drop zones (the container divs inside folders)
     document.querySelectorAll('.drop-zone').forEach(zone => {
         zone.addEventListener('dragover', (e) => {
             e.preventDefault();
@@ -329,40 +445,42 @@
             zone.classList.add('drag-over');
         });
 
-        zone.addEventListener('dragleave', () => {
-            zone.classList.remove('drag-over');
+        zone.addEventListener('dragleave', (e) => {
+            // Only remove if leaving the zone entirely
+            if (!zone.contains(e.relatedTarget)) {
+                zone.classList.remove('drag-over');
+            }
         });
 
         zone.addEventListener('drop', async (e) => {
             e.preventDefault();
-            zone.classList.remove('drag-over');
-
+            clearDragStyles();
             if (!draggedFeed) return;
+            await moveFeedToFolder(draggedFeed.dataset.feedId, zone.dataset.folderId);
+        });
+    });
 
-            const feedId = draggedFeed.dataset.feedId;
-            const targetFolderId = zone.dataset.folderId;
+    // Also handle drops on folder toggles (the folder name/icon)
+    document.querySelectorAll('.folder').forEach(folder => {
+        const folderId = folder.dataset.folderId;
 
-            // Don't move if dropped in same folder
-            const currentFolder = draggedFeed.closest('.drop-zone');
-            if (currentFolder && currentFolder.dataset.folderId === targetFolderId) return;
+        folder.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            folder.classList.add('drag-over');
+        });
 
-            showToast('Moving feed...');
-            try {
-                const res = await fetch(`/api/feed/${feedId}/move`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ folder_id: targetFolderId === '0' ? null : parseInt(targetFolderId, 10) })
-                });
-                if (res.ok) {
-                    showToast('Feed moved');
-                    setTimeout(() => location.reload(), 500);
-                } else {
-                    const data = await res.json();
-                    showToast(data.error || 'Failed to move feed');
-                }
-            } catch (e) {
-                showToast('Error moving feed');
+        folder.addEventListener('dragleave', (e) => {
+            if (!folder.contains(e.relatedTarget)) {
+                folder.classList.remove('drag-over');
             }
+        });
+
+        folder.addEventListener('drop', async (e) => {
+            e.preventDefault();
+            clearDragStyles();
+            if (!draggedFeed) return;
+            await moveFeedToFolder(draggedFeed.dataset.feedId, folderId);
         });
     });
 

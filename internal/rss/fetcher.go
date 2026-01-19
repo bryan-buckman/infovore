@@ -37,7 +37,22 @@ func NewFetcher(db *database.DB) *Fetcher {
 func (f *Fetcher) FetchFeed(ctx context.Context, feed model.Feed) (int, error) {
 	parsed, err := f.parser.ParseURLWithContext(feed.URL, ctx)
 	if err != nil {
+		// Record the error for UI display.
+		errMsg := err.Error()
+		if len(errMsg) > 200 {
+			errMsg = errMsg[:200]
+		}
+		_ = f.db.UpdateFeedError(feed.ID, errMsg)
 		return 0, fmt.Errorf("parse feed %s: %w", feed.URL, err)
+	}
+
+	// Update feed title from RSS if it differs and isn't just the URL.
+	if parsed.Title != "" && parsed.Title != feed.Title && feed.Title == feed.URL {
+		if err := f.db.UpdateFeedTitle(feed.ID, parsed.Title); err != nil {
+			log.Printf("Error updating title for feed %d: %v", feed.ID, err)
+		} else {
+			log.Printf("Updated feed title: %s -> %s", feed.URL, parsed.Title)
+		}
 	}
 
 	now := time.Now()
@@ -76,10 +91,13 @@ func (f *Fetcher) FetchFeed(ctx context.Context, feed model.Feed) (int, error) {
 		}
 	}
 
-	// Update last fetched time.
+	// Update last fetched time (and clear any previous error).
 	if err := f.db.UpdateFeedLastFetched(feed.ID, now); err != nil {
 		log.Printf("Error updating last_fetched for feed %d: %v", feed.ID, err)
 	}
+
+	// Log successful fetch.
+	log.Printf("Fetched %s: %d new items", feed.URL, newCount)
 
 	return newCount, nil
 }

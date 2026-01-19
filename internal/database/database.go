@@ -21,6 +21,11 @@ func New(path string) (*DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
+	// Enable foreign key constraints.
+	if _, err := conn.Exec("PRAGMA foreign_keys = ON;"); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("enable foreign keys: %w", err)
+	}
 	// Enable WAL mode for better concurrency.
 	if _, err := conn.Exec("PRAGMA journal_mode=WAL;"); err != nil {
 		conn.Close()
@@ -57,7 +62,8 @@ func (db *DB) migrate() error {
 		title TEXT NOT NULL,
 		url TEXT NOT NULL UNIQUE,
 		icon_url TEXT DEFAULT '',
-		last_fetched DATETIME
+		last_fetched DATETIME,
+		last_error TEXT DEFAULT ''
 	);
 	CREATE TABLE IF NOT EXISTS items (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -78,8 +84,12 @@ func (db *DB) migrate() error {
 	-- Default polling interval (15 minutes minimum).
 	INSERT OR IGNORE INTO settings (key, value) VALUES ('polling_interval_minutes', '15');
 	`
-	_, err := db.conn.Exec(schema)
-	return err
+	if _, err := db.conn.Exec(schema); err != nil {
+		return err
+	}
+	// Migration: add last_error column if it doesn't exist.
+	_, _ = db.conn.Exec("ALTER TABLE feeds ADD COLUMN last_error TEXT DEFAULT ''")
+	return nil
 }
 
 // --- Folder Methods ---
@@ -133,10 +143,13 @@ func (db *DB) GetOrCreateFolder(name string, parentID *int64) (int64, error) {
 func (db *DB) GetFeeds(folderID *int64) ([]model.Feed, error) {
 	var rows *sql.Rows
 	var err error
+	query := `SELECT f.id, f.folder_id, f.title, f.url, f.icon_url, f.last_fetched, f.last_error,
+		(SELECT COUNT(*) FROM items WHERE feed_id = f.id) as item_count
+		FROM feeds f`
 	if folderID == nil {
-		rows, err = db.conn.Query("SELECT id, folder_id, title, url, icon_url, last_fetched FROM feeds ORDER BY title")
+		rows, err = db.conn.Query(query + " ORDER BY f.title")
 	} else {
-		rows, err = db.conn.Query("SELECT id, folder_id, title, url, icon_url, last_fetched FROM feeds WHERE folder_id = ? ORDER BY title", *folderID)
+		rows, err = db.conn.Query(query + " WHERE f.folder_id = ? ORDER BY f.title", *folderID)
 	}
 	if err != nil {
 		return nil, err
@@ -146,11 +159,15 @@ func (db *DB) GetFeeds(folderID *int64) ([]model.Feed, error) {
 	for rows.Next() {
 		var f model.Feed
 		var lastFetched sql.NullTime
-		if err := rows.Scan(&f.ID, &f.FolderID, &f.Title, &f.URL, &f.IconURL, &lastFetched); err != nil {
+		var lastError sql.NullString
+		if err := rows.Scan(&f.ID, &f.FolderID, &f.Title, &f.URL, &f.IconURL, &lastFetched, &lastError, &f.ItemCount); err != nil {
 			return nil, err
 		}
 		if lastFetched.Valid {
 			f.LastFetched = lastFetched.Time
+		}
+		if lastError.Valid {
+			f.LastError = lastError.String
 		}
 		feeds = append(feeds, f)
 	}
@@ -164,7 +181,7 @@ func (db *DB) GetAllFeeds() ([]model.Feed, error) {
 
 // GetFeedsByFolderID returns feeds belonging to a specific folder.
 func (db *DB) GetFeedsByFolderID(folderID int64) ([]model.Feed, error) {
-	rows, err := db.conn.Query("SELECT id, folder_id, title, url, icon_url, last_fetched FROM feeds WHERE folder_id = ? ORDER BY title", folderID)
+	rows, err := db.conn.Query("SELECT id, folder_id, title, url, icon_url, last_fetched, last_error FROM feeds WHERE folder_id = ? ORDER BY title", folderID)
 	if err != nil {
 		return nil, err
 	}
@@ -173,11 +190,15 @@ func (db *DB) GetFeedsByFolderID(folderID int64) ([]model.Feed, error) {
 	for rows.Next() {
 		var f model.Feed
 		var lastFetched sql.NullTime
-		if err := rows.Scan(&f.ID, &f.FolderID, &f.Title, &f.URL, &f.IconURL, &lastFetched); err != nil {
+		var lastError sql.NullString
+		if err := rows.Scan(&f.ID, &f.FolderID, &f.Title, &f.URL, &f.IconURL, &lastFetched, &lastError); err != nil {
 			return nil, err
 		}
 		if lastFetched.Valid {
 			f.LastFetched = lastFetched.Time
+		}
+		if lastError.Valid {
+			f.LastError = lastError.String
 		}
 		feeds = append(feeds, f)
 	}
@@ -186,7 +207,7 @@ func (db *DB) GetFeedsByFolderID(folderID int64) ([]model.Feed, error) {
 
 // GetUnfiledFeeds returns feeds that don't belong to any folder.
 func (db *DB) GetUnfiledFeeds() ([]model.Feed, error) {
-	rows, err := db.conn.Query("SELECT id, folder_id, title, url, icon_url, last_fetched FROM feeds WHERE folder_id IS NULL ORDER BY title")
+	rows, err := db.conn.Query("SELECT id, folder_id, title, url, icon_url, last_fetched, last_error FROM feeds WHERE folder_id IS NULL ORDER BY title")
 	if err != nil {
 		return nil, err
 	}
@@ -195,11 +216,15 @@ func (db *DB) GetUnfiledFeeds() ([]model.Feed, error) {
 	for rows.Next() {
 		var f model.Feed
 		var lastFetched sql.NullTime
-		if err := rows.Scan(&f.ID, &f.FolderID, &f.Title, &f.URL, &f.IconURL, &lastFetched); err != nil {
+		var lastError sql.NullString
+		if err := rows.Scan(&f.ID, &f.FolderID, &f.Title, &f.URL, &f.IconURL, &lastFetched, &lastError); err != nil {
 			return nil, err
 		}
 		if lastFetched.Valid {
 			f.LastFetched = lastFetched.Time
+		}
+		if lastError.Valid {
+			f.LastError = lastError.String
 		}
 		feeds = append(feeds, f)
 	}
@@ -249,7 +274,19 @@ func (db *DB) GetOrCreateFeed(folderID *int64, title, url string) (int64, bool, 
 
 // UpdateFeedLastFetched updates the last_fetched timestamp for a feed.
 func (db *DB) UpdateFeedLastFetched(feedID int64, t time.Time) error {
-	_, err := db.conn.Exec("UPDATE feeds SET last_fetched = ? WHERE id = ?", t, feedID)
+	_, err := db.conn.Exec("UPDATE feeds SET last_fetched = ?, last_error = '' WHERE id = ?", t, feedID)
+	return err
+}
+
+// UpdateFeedTitle updates the title for a feed.
+func (db *DB) UpdateFeedTitle(feedID int64, title string) error {
+	_, err := db.conn.Exec("UPDATE feeds SET title = ? WHERE id = ?", title, feedID)
+	return err
+}
+
+// UpdateFeedError sets the last error message for a feed.
+func (db *DB) UpdateFeedError(feedID int64, errMsg string) error {
+	_, err := db.conn.Exec("UPDATE feeds SET last_error = ? WHERE id = ?", errMsg, feedID)
 	return err
 }
 
@@ -257,13 +294,17 @@ func (db *DB) UpdateFeedLastFetched(feedID int64, t time.Time) error {
 func (db *DB) GetFeedByID(feedID int64) (*model.Feed, error) {
 	var f model.Feed
 	var lastFetched sql.NullTime
-	err := db.conn.QueryRow("SELECT id, folder_id, title, url, icon_url, last_fetched FROM feeds WHERE id = ?", feedID).
-		Scan(&f.ID, &f.FolderID, &f.Title, &f.URL, &f.IconURL, &lastFetched)
+	var lastError sql.NullString
+	err := db.conn.QueryRow("SELECT id, folder_id, title, url, icon_url, last_fetched, last_error FROM feeds WHERE id = ?", feedID).
+		Scan(&f.ID, &f.FolderID, &f.Title, &f.URL, &f.IconURL, &lastFetched, &lastError)
 	if err != nil {
 		return nil, err
 	}
 	if lastFetched.Valid {
 		f.LastFetched = lastFetched.Time
+	}
+	if lastError.Valid {
+		f.LastError = lastError.String
 	}
 	return &f, nil
 }

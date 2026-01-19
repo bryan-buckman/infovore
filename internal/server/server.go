@@ -89,6 +89,7 @@ func (s *Server) setupRoutes() {
 		r.Delete("/feed/{feedID}", s.handleDeleteFeed)
 		r.Delete("/folder/{folderID}", s.handleDeleteFolder)
 		r.Post("/feed/{feedID}/move", s.handleMoveFeed)
+		r.Post("/feed", s.handleAddFeed)
 	})
 
 	s.router = r
@@ -149,10 +150,12 @@ func (s *Server) handleFeed(w http.ResponseWriter, r *http.Request) {
 	items, _ := s.db.GetItems(feedID, false)
 	interval, _ := s.db.GetPollingInterval()
 
-	// Get feed name for title.
+	// Get feed name and error for title.
 	pageTitle := "Feed"
+	feedError := ""
 	if feed, err := s.db.GetFeedByID(feedID); err == nil {
 		pageTitle = feed.Title
+		feedError = feed.LastError
 	}
 
 	data := map[string]interface{}{
@@ -162,6 +165,7 @@ func (s *Server) handleFeed(w http.ResponseWriter, r *http.Request) {
 		"CurrentFeedID":    feedID,
 		"PollingInterval":  interval,
 		"PageTitle":        pageTitle,
+		"FeedError":        feedError,
 	}
 	s.render(w, "layout.html", data)
 }
@@ -524,6 +528,35 @@ func (s *Server) handleDeleteRead(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":  "ok",
 		"deleted": len(req.ItemIDs),
+	})
+}
+
+func (s *Server) handleAddFeed(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		URL      string `json:"url"`
+		FolderID *int64 `json:"folder_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+	if req.URL == "" {
+		http.Error(w, "URL is required", http.StatusBadRequest)
+		return
+	}
+
+	// Use URL as default title until we fetch the feed
+	feedID, isNew, err := s.db.GetOrCreateFeed(req.FolderID, req.URL, req.URL)
+	if err != nil {
+		http.Error(w, "Failed to add feed", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":  "ok",
+		"feed_id": feedID,
+		"is_new":  isNew,
 	})
 }
 

@@ -27,3 +27,5 @@ go.work
 dist/
 bin/
 golang-test-server
+infovore
+infovore.exe
