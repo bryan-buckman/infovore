@@ -1,0 +1,177 @@
+// Package rss provides feed fetching and parsing.
+package rss
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"sync"
+	"time"
+
+	"github.com/bryan-buckman/infovore/internal/database"
+	"github.com/bryan-buckman/infovore/internal/model"
+	"github.com/mmcdole/gofeed"
+)
+
+// MinPollingIntervalMinutes is the minimum allowed interval.
+const MinPollingIntervalMinutes = 15
+
+// Fetcher handles RSS feed fetching.
+type Fetcher struct {
+	db     *database.DB
+	parser *gofeed.Parser
+}
+
+// NewFetcher creates a new fetcher.
+func NewFetcher(db *database.DB) *Fetcher {
+	return &Fetcher{
+		db:     db,
+		parser: gofeed.NewParser(),
+	}
+}
+
+// FetchFeed fetches and parses a single feed, storing new items.
+// Returns the number of new items added.
+func (f *Fetcher) FetchFeed(ctx context.Context, feed model.Feed) (int, error) {
+	parsed, err := f.parser.ParseURLWithContext(feed.URL, ctx)
+	if err != nil {
+		return 0, fmt.Errorf("parse feed %s: %w", feed.URL, err)
+	}
+
+	now := time.Now()
+	newCount := 0
+	for _, item := range parsed.Items {
+		guid := item.GUID
+		if guid == "" {
+			guid = item.Link
+		}
+		if guid == "" {
+			continue
+		}
+		pubDate := now
+		if item.PublishedParsed != nil {
+			pubDate = *item.PublishedParsed
+		}
+		dbItem := &model.Item{
+			FeedID:      feed.ID,
+			GUID:        guid,
+			Title:       item.Title,
+			Content:     item.Content,
+			Link:        item.Link,
+			PublishedAt: pubDate,
+			FetchedAt:   now,
+		}
+		if dbItem.Content == "" {
+			dbItem.Content = item.Description
+		}
+		_, isNew, err := f.db.AddItem(dbItem)
+		if err != nil {
+			log.Printf("Error adding item %s: %v", guid, err)
+			continue
+		}
+		if isNew {
+			newCount++
+		}
+	}
+
+	// Update last fetched time.
+	if err := f.db.UpdateFeedLastFetched(feed.ID, now); err != nil {
+		log.Printf("Error updating last_fetched for feed %d: %v", feed.ID, err)
+	}
+
+	return newCount, nil
+}
+
+// FetchAll fetches all feeds concurrently.
+// Returns a map of feed ID -> new item count.
+func (f *Fetcher) FetchAll(ctx context.Context) (map[int64]int, error) {
+	feeds, err := f.db.GetAllFeeds()
+	if err != nil {
+		return nil, err
+	}
+
+	results := make(map[int64]int)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	// Limit concurrency to avoid overwhelming servers.
+	sem := make(chan struct{}, 5)
+
+	for _, feed := range feeds {
+		wg.Add(1)
+		go func(fd model.Feed) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			count, err := f.FetchFeed(ctx, fd)
+			if err != nil {
+				log.Printf("Failed to fetch %s: %v", fd.URL, err)
+				return
+			}
+			mu.Lock()
+			results[fd.ID] = count
+			mu.Unlock()
+		}(feed)
+	}
+	wg.Wait()
+	return results, nil
+}
+
+// Poller runs continuous polling.
+type Poller struct {
+	fetcher  *Fetcher
+	db       *database.DB
+	stopChan chan struct{}
+	wg       sync.WaitGroup
+}
+
+// NewPoller creates a background poller.
+func NewPoller(db *database.DB) *Poller {
+	return &Poller{
+		fetcher:  NewFetcher(db),
+		db:       db,
+		stopChan: make(chan struct{}),
+	}
+}
+
+// Start begins the polling loop.
+func (p *Poller) Start() {
+	p.wg.Add(1)
+	go func() {
+		defer p.wg.Done()
+		for {
+			interval, _ := p.db.GetPollingInterval()
+			if interval < MinPollingIntervalMinutes {
+				interval = MinPollingIntervalMinutes
+			}
+			log.Printf("Poller: Fetching all feeds (interval: %dm)", interval)
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			results, err := p.fetcher.FetchAll(ctx)
+			cancel()
+
+			if err != nil {
+				log.Printf("Poller error: %v", err)
+			} else {
+				total := 0
+				for _, c := range results {
+					total += c
+				}
+				log.Printf("Poller: Fetched %d new items from %d feeds", total, len(results))
+			}
+
+			select {
+			case <-p.stopChan:
+				return
+			case <-time.After(time.Duration(interval) * time.Minute):
+			}
+		}
+	}()
+}
+
+// Stop stops the poller gracefully.
+func (p *Poller) Stop() {
+	close(p.stopChan)
+	p.wg.Wait()
+}

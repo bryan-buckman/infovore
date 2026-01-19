@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Infovore - RSS Reader</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="app-container">
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <h1 class="logo">📚 Infovore</h1>
+                <button class="menu-btn" id="menuBtn" aria-label="Settings">☰</button>
+            </div>
+            <nav class="sidebar-nav">
+                <a href="/" class="nav-item {{if not .CurrentFeedID}}active{{end}}">🏠 All Items</a>
+                {{range .Folders}}<div class="folder"><span>📁 {{.Name}}</span></div>{{end}}
+                {{range .Feeds}}<a href="/feed/{{.ID}}" class="nav-item feed-item {{if eq $.CurrentFeedID .ID}}active{{end}}">📰 {{.Title}}</a>{{end}}
+            </nav>
+            <div class="sidebar-footer">
+                <button class="btn btn-ghost" id="refreshBtn">🔄 Refresh</button>
+            </div>
+        </aside>
+        <main class="main-content">
+            <header class="main-header">
+                <button class="sidebar-toggle" id="sidebarToggle">☰</button>
+                <h2>{{if .CurrentFeedID}}Feed{{else}}All Items{{end}}</h2>
+            </header>
+            <div class="items-container" id="itemsContainer">
+                {{if not .Items}}<div class="empty-state"><div class="empty-icon">📭</div><h3>No items yet</h3><p>Import an OPML file to get started.</p></div>
+                {{else}}{{range .Items}}<article class="item {{if not .IsRead}}unread{{end}}" data-item-id="{{.ID}}">
+                    <div class="item-header"><h3 class="item-title"><a href="{{.Link}}" target="_blank">{{.Title}}</a></h3><span class="item-time">{{timeAgo .PublishedAt}}</span></div>
+                    <div class="item-content">{{.Content}}</div>
+                </article>{{end}}{{end}}
+            </div>
+        </main>
+    </div>
+    <div class="modal-overlay" id="settingsModal">
+        <div class="modal">
+            <div class="modal-header"><h2>Settings</h2><button class="modal-close" id="closeSettings">&times;</button></div>
+            <div class="modal-body">
+                <div class="form-group"><label>Polling Interval (min, ≥15)</label><input type="number" id="pollingInterval" min="15" value="{{.PollingInterval}}"></div>
+                <div class="form-group"><label>Import OPML</label><input type="file" id="opmlFile" accept=".opml,.xml"><button class="btn btn-secondary" id="importBtn">Import</button></div>
+                <div class="form-group"><label>Export OPML</label><a href="/api/export-opml" class="btn btn-secondary" download>Export</a></div>
+                <div class="form-group"><button class="btn btn-danger" id="cleanupBtn">Delete Read Items</button></div>
+            </div>
+            <div class="modal-footer"><button class="btn btn-primary" id="saveSettings">Save</button></div>
+        </div>
+    </div>
+    <div class="toast" id="toast"><span class="toast-icon">⏳</span><span id="toastMessage">Processing...</span><div class="toast-progress" id="toastProgress"></div></div>
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

@@ -1,6 +1,6 @@
 {
-	"name": "Go",
-	"image": "mcr.microsoft.com/devcontainers/go:1-bullseye",
+	"name": "Infovore",
+	"image": "mcr.microsoft.com/devcontainers/go:1.23-bookworm",
 	"runArgs": [
 		"--init"
 	],
@@ -9,14 +9,16 @@
 	],
 	"portsAttributes": {
 		"8080": {
-			"label": "My App",
+			"label": "Infovore",
 			"onAutoForward": "notify"
 		}
 	},
+	"postCreateCommand": "go mod download",
 	"customizations": {
 		"vscode": {
 			"settings": {
-				"terminal.integrated.shell.linux": "/bin/bash"
+				"go.toolsManagement.autoUpdate": true,
+				"terminal.integrated.defaultProfile.linux": "bash"
 			},
 			"extensions": [
 				"golang.go"
