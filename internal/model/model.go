@@ -33,6 +33,12 @@ type Item struct {
 	IsRead      bool
 }
 
+// FolderWithFeeds represents a folder containing its feeds for UI rendering.
+type FolderWithFeeds struct {
+	Folder
+	Feeds []Feed
+}
+
 // Settings key constants.
 const (
 	SettingPollingInterval = "polling_interval_minutes"

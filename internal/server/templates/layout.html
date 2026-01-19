@@ -14,25 +14,34 @@
                 <h1 class="logo">📚 Infovore</h1>
                 <button class="menu-btn" id="menuBtn" aria-label="Settings">☰</button>
             </div>
-            <nav class="sidebar-nav">
-                <a href="/" class="nav-item {{if not .CurrentFeedID}}active{{end}}">🏠 All Items</a>
-                {{range .Folders}}<div class="folder"><span>📁 {{.Name}}</span></div>{{end}}
-                {{range .Feeds}}<a href="/feed/{{.ID}}" class="nav-item feed-item {{if eq $.CurrentFeedID .ID}}active{{end}}">📰 {{.Title}}</a>{{end}}
-            </nav>
-            <div class="sidebar-footer">
-                <button class="btn btn-ghost" id="refreshBtn">🔄 Refresh</button>
+            <div class="sidebar-actions">
+                <button class="btn btn-ghost btn-sm" id="refreshBtn">🔄 Update Feeds</button>
             </div>
+            <nav class="sidebar-nav">
+                <a href="/" class="nav-item {{if and (not .CurrentFeedID) (not .CurrentFolderID)}}active{{end}}">🏠 All Items</a>
+                {{range .FoldersWithFeeds}}
+                <div class="folder" data-folder-id="{{.ID}}">
+                    <a href="/folder/{{.ID}}" class="folder-toggle {{if eq $.CurrentFolderID .ID}}active{{end}}" data-folder-id="{{.ID}}">📁 {{.Name}}</a>
+                    <div class="folder-feeds drop-zone" id="folder-{{.ID}}" data-folder-id="{{.ID}}">
+                        {{range .Feeds}}<a href="/feed/{{.ID}}" class="nav-item feed-item {{if eq $.CurrentFeedID .ID}}active{{end}}" data-feed-id="{{.ID}}" draggable="true">📰 {{.Title}}</a>{{end}}
+                    </div>
+                </div>
+                {{end}}
+                <div class="unfiled-feeds drop-zone" data-folder-id="0">
+                {{range .UnfiledFeeds}}<a href="/feed/{{.ID}}" class="nav-item feed-item {{if eq $.CurrentFeedID .ID}}active{{end}}" data-feed-id="{{.ID}}" draggable="true">📰 {{.Title}}</a>{{end}}
+                </div>
+            </nav>
         </aside>
         <main class="main-content">
             <header class="main-header">
                 <button class="sidebar-toggle" id="sidebarToggle">☰</button>
-                <h2>{{if .CurrentFeedID}}Feed{{else}}All Items{{end}}</h2>
+                <h2>{{.PageTitle}}</h2>
             </header>
             <div class="items-container" id="itemsContainer">
-                {{if not .Items}}<div class="empty-state"><div class="empty-icon">📭</div><h3>No items yet</h3><p>Import an OPML file to get started.</p></div>
+                {{if not .Items}}<div class="empty-state"><div class="empty-icon">📭</div><h3>No items yet</h3><p>Import an OPML file and click "Update Feeds" to get started.</p></div>
                 {{else}}{{range .Items}}<article class="item {{if not .IsRead}}unread{{end}}" data-item-id="{{.ID}}">
                     <div class="item-header"><h3 class="item-title"><a href="{{.Link}}" target="_blank">{{.Title}}</a></h3><span class="item-time">{{timeAgo .PublishedAt}}</span></div>
-                    <div class="item-content">{{.Content}}</div>
+                    <div class="item-content">{{safeHTML .Content}}</div>
                 </article>{{end}}{{end}}
             </div>
         </main>
@@ -50,6 +59,26 @@
         </div>
     </div>
     <div class="toast" id="toast"><span class="toast-icon">⏳</span><span id="toastMessage">Processing...</span><div class="toast-progress" id="toastProgress"></div></div>
+    <div class="context-menu" id="feedContextMenu">
+        <button class="context-menu-item" id="updateFeedBtn">🔄 Update Feed</button>
+        <button class="context-menu-item" id="deleteFeedBtn">🗑️ Remove Feed</button>
+    </div>
+    <div class="context-menu" id="folderContextMenu">
+        <button class="context-menu-item" id="updateFolderBtn">🔄 Update Folder</button>
+        <button class="context-menu-item" id="deleteFolderBtn">🗑️ Delete Folder</button>
+    </div>
+    <div class="modal-overlay" id="confirmModal">
+        <div class="modal">
+            <div class="modal-header"><h2>Confirm Delete</h2><button class="modal-close" id="closeConfirm">&times;</button></div>
+            <div class="modal-body">
+                <p id="confirmMessage">Are you sure you want to delete this folder and all its feeds?</p>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="confirmNo">No</button>
+                <button class="btn btn-danger" id="confirmYes">Yes, Delete</button>
+            </div>
+        </div>
+    </div>
     <script src="/static/js/app.js"></script>
 </body>
 </html>

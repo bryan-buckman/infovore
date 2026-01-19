@@ -13,6 +13,8 @@ import (
 	"github.com/mmcdole/gofeed"
 )
 
+// Note: sync is still used by Poller
+
 // MinPollingIntervalMinutes is the minimum allowed interval.
 const MinPollingIntervalMinutes = 15
 
@@ -82,7 +84,7 @@ func (f *Fetcher) FetchFeed(ctx context.Context, feed model.Feed) (int, error) {
 	return newCount, nil
 }
 
-// FetchAll fetches all feeds concurrently.
+// FetchAll fetches all feeds sequentially to avoid database locking.
 // Returns a map of feed ID -> new item count.
 func (f *Fetcher) FetchAll(ctx context.Context) (map[int64]int, error) {
 	feeds, err := f.db.GetAllFeeds()
@@ -91,30 +93,24 @@ func (f *Fetcher) FetchAll(ctx context.Context) (map[int64]int, error) {
 	}
 
 	results := make(map[int64]int)
-	var mu sync.Mutex
-	var wg sync.WaitGroup
-
-	// Limit concurrency to avoid overwhelming servers.
-	sem := make(chan struct{}, 5)
 
 	for _, feed := range feeds {
-		wg.Add(1)
-		go func(fd model.Feed) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
+		// Check for context cancellation between feeds.
+		select {
+		case <-ctx.Done():
+			log.Printf("FetchAll cancelled after %d feeds", len(results))
+			return results, ctx.Err()
+		default:
+		}
 
-			count, err := f.FetchFeed(ctx, fd)
-			if err != nil {
-				log.Printf("Failed to fetch %s: %v", fd.URL, err)
-				return
-			}
-			mu.Lock()
-			results[fd.ID] = count
-			mu.Unlock()
-		}(feed)
+		count, err := f.FetchFeed(ctx, feed)
+		if err != nil {
+			log.Printf("Failed to fetch %s: %v", feed.URL, err)
+			continue
+		}
+		results[feed.ID] = count
 	}
-	wg.Wait()
+
 	return results, nil
 }
 

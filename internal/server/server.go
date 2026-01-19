@@ -30,17 +30,19 @@ var staticFS embed.FS
 
 // Server is the main HTTP server.
 type Server struct {
-	db        *database.DB
-	fetcher   *rss.Fetcher
-	poller    *rss.Poller
-	router    chi.Router
-	templates *template.Template
+	db         *database.DB
+	fetcher    *rss.Fetcher
+	poller     *rss.Poller
+	router     chi.Router
+	httpServer *http.Server
+	templates  *template.Template
 }
 
 // New creates a new server.
 func New(db *database.DB) (*Server, error) {
 	tmpl, err := template.New("").Funcs(template.FuncMap{
-		"timeAgo": timeAgo,
+		"timeAgo":  timeAgo,
+		"safeHTML": func(s string) template.HTML { return template.HTML(s) },
 	}).ParseFS(templatesFS, "templates/*.html")
 	if err != nil {
 		return nil, fmt.Errorf("parse templates: %w", err)
@@ -69,47 +71,71 @@ func (s *Server) setupRoutes() {
 	// Pages.
 	r.Get("/", s.handleHome)
 	r.Get("/feed/{feedID}", s.handleFeed)
+	r.Get("/folder/{folderID}", s.handleFolder)
 
 	// API.
 	r.Route("/api", func(r chi.Router) {
 		r.Post("/mark-read", s.handleMarkRead)
+		r.Post("/delete-read", s.handleDeleteRead)
 		r.Post("/settings", s.handleSaveSettings)
 		r.Get("/settings", s.handleGetSettings)
 		r.Post("/import-opml", s.handleImportOPML)
 		r.Get("/export-opml", s.handleExportOPML)
 		r.Post("/refresh", s.handleRefresh)
+		r.Post("/refresh-feed/{feedID}", s.handleRefreshFeed)
+		r.Post("/refresh-folder/{folderID}", s.handleRefreshFolder)
 		r.Post("/cleanup", s.handleCleanup)
 		r.Get("/sidebar", s.handleSidebar)
+		r.Delete("/feed/{feedID}", s.handleDeleteFeed)
+		r.Delete("/folder/{folderID}", s.handleDeleteFolder)
+		r.Post("/feed/{feedID}/move", s.handleMoveFeed)
 	})
 
 	s.router = r
 }
 
-// Start starts the server and poller.
+// Start starts the server (poller is NOT started automatically - use manual refresh).
 func (s *Server) Start(addr string) error {
-	s.poller.Start()
+	s.httpServer = &http.Server{
+		Addr:    addr,
+		Handler: s.router,
+	}
+	// Note: Poller is NOT started automatically to avoid 403 errors from aggressive polling.
+	// Users should use the manual Refresh button instead.
 	log.Printf("Server starting on %s", addr)
-	return http.ListenAndServe(addr, s.router)
+	return s.httpServer.ListenAndServe()
 }
 
-// Stop stops the poller.
+// Stop gracefully shuts down the server and poller.
 func (s *Server) Stop() {
+	log.Println("Stopping poller...")
 	s.poller.Stop()
+
+	if s.httpServer != nil {
+		log.Println("Shutting down HTTP server...")
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := s.httpServer.Shutdown(ctx); err != nil {
+			log.Printf("HTTP server shutdown error: %v", err)
+		}
+	}
+	log.Println("Shutdown complete")
 }
 
 // --- Page Handlers ---
 
 func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
-	folders, _ := s.db.GetFolders()
-	feeds, _ := s.db.GetAllFeeds()
+	foldersWithFeeds, _ := s.db.GetFoldersWithFeeds()
+	unfiledFeeds, _ := s.db.GetUnfiledFeeds()
 	items, _ := s.db.GetAllItems(false)
 	interval, _ := s.db.GetPollingInterval()
 
 	data := map[string]interface{}{
-		"Folders":         folders,
-		"Feeds":           feeds,
-		"Items":           items,
-		"PollingInterval": interval,
+		"FoldersWithFeeds": foldersWithFeeds,
+		"UnfiledFeeds":     unfiledFeeds,
+		"Items":            items,
+		"PollingInterval":  interval,
+		"PageTitle":        "All Items",
 	}
 	s.render(w, "layout.html", data)
 }
@@ -118,17 +144,50 @@ func (s *Server) handleFeed(w http.ResponseWriter, r *http.Request) {
 	feedIDStr := chi.URLParam(r, "feedID")
 	feedID, _ := strconv.ParseInt(feedIDStr, 10, 64)
 
-	folders, _ := s.db.GetFolders()
-	feeds, _ := s.db.GetAllFeeds()
+	foldersWithFeeds, _ := s.db.GetFoldersWithFeeds()
+	unfiledFeeds, _ := s.db.GetUnfiledFeeds()
 	items, _ := s.db.GetItems(feedID, false)
 	interval, _ := s.db.GetPollingInterval()
 
+	// Get feed name for title.
+	pageTitle := "Feed"
+	if feed, err := s.db.GetFeedByID(feedID); err == nil {
+		pageTitle = feed.Title
+	}
+
 	data := map[string]interface{}{
-		"Folders":         folders,
-		"Feeds":           feeds,
-		"Items":           items,
-		"CurrentFeedID":   feedID,
-		"PollingInterval": interval,
+		"FoldersWithFeeds": foldersWithFeeds,
+		"UnfiledFeeds":     unfiledFeeds,
+		"Items":            items,
+		"CurrentFeedID":    feedID,
+		"PollingInterval":  interval,
+		"PageTitle":        pageTitle,
+	}
+	s.render(w, "layout.html", data)
+}
+
+func (s *Server) handleFolder(w http.ResponseWriter, r *http.Request) {
+	folderIDStr := chi.URLParam(r, "folderID")
+	folderID, _ := strconv.ParseInt(folderIDStr, 10, 64)
+
+	foldersWithFeeds, _ := s.db.GetFoldersWithFeeds()
+	unfiledFeeds, _ := s.db.GetUnfiledFeeds()
+	items, _ := s.db.GetItemsByFolderID(folderID, false)
+	interval, _ := s.db.GetPollingInterval()
+
+	// Get folder name for title.
+	pageTitle := "Folder"
+	if folder, err := s.db.GetFolderByID(folderID); err == nil {
+		pageTitle = folder.Name
+	}
+
+	data := map[string]interface{}{
+		"FoldersWithFeeds": foldersWithFeeds,
+		"UnfiledFeeds":     unfiledFeeds,
+		"Items":            items,
+		"CurrentFolderID":  folderID,
+		"PollingInterval":  interval,
+		"PageTitle":        pageTitle,
 	}
 	s.render(w, "layout.html", data)
 }
@@ -216,6 +275,9 @@ func (s *Server) handleImportOPML(w http.ResponseWriter, r *http.Request) {
 			imported++
 		}
 	}
+
+	// Note: We no longer auto-fetch after import to avoid 403 errors.
+	// Users should click the Refresh button manually.
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -308,6 +370,160 @@ func (s *Server) handleSidebar(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"folders": folders,
 		"feeds":   feeds,
+	})
+}
+
+func (s *Server) handleDeleteFeed(w http.ResponseWriter, r *http.Request) {
+	feedIDStr := chi.URLParam(r, "feedID")
+	feedID, err := strconv.ParseInt(feedIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid feed ID", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.db.DeleteFeed(feedID); err != nil {
+		http.Error(w, "Failed to delete feed", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status": "ok",
+	})
+}
+
+func (s *Server) handleDeleteFolder(w http.ResponseWriter, r *http.Request) {
+	folderIDStr := chi.URLParam(r, "folderID")
+	folderID, err := strconv.ParseInt(folderIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid folder ID", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.db.DeleteFolder(folderID); err != nil {
+		http.Error(w, "Failed to delete folder", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status": "ok",
+	})
+}
+
+func (s *Server) handleMoveFeed(w http.ResponseWriter, r *http.Request) {
+	feedIDStr := chi.URLParam(r, "feedID")
+	feedID, err := strconv.ParseInt(feedIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid feed ID", http.StatusBadRequest)
+		return
+	}
+
+	var req struct {
+		FolderID *int64 `json:"folder_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.db.MoveFeedToFolder(feedID, req.FolderID); err != nil {
+		http.Error(w, "Failed to move feed", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status": "ok",
+	})
+}
+
+func (s *Server) handleRefreshFeed(w http.ResponseWriter, r *http.Request) {
+	feedIDStr := chi.URLParam(r, "feedID")
+	feedID, err := strconv.ParseInt(feedIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid feed ID", http.StatusBadRequest)
+		return
+	}
+
+	feed, err := s.db.GetFeedByID(feedID)
+	if err != nil {
+		http.Error(w, "Feed not found", http.StatusNotFound)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
+	defer cancel()
+
+	count, err := s.fetcher.FetchFeed(ctx, *feed)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Fetch error: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":    "ok",
+		"new_items": count,
+	})
+}
+
+func (s *Server) handleRefreshFolder(w http.ResponseWriter, r *http.Request) {
+	folderIDStr := chi.URLParam(r, "folderID")
+	folderID, err := strconv.ParseInt(folderIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid folder ID", http.StatusBadRequest)
+		return
+	}
+
+	feeds, err := s.db.GetFeedsByFolderID(folderID)
+	if err != nil {
+		http.Error(w, "Failed to get feeds", http.StatusInternalServerError)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
+	defer cancel()
+
+	total := 0
+	for _, feed := range feeds {
+		select {
+		case <-ctx.Done():
+			break
+		default:
+		}
+		count, err := s.fetcher.FetchFeed(ctx, feed)
+		if err != nil {
+			log.Printf("Failed to fetch %s: %v", feed.URL, err)
+			continue
+		}
+		total += count
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":    "ok",
+		"new_items": total,
+		"feeds":     len(feeds),
+	})
+}
+
+func (s *Server) handleDeleteRead(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ItemIDs []int64 `json:"item_ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+	if err := s.db.DeleteReadItems(req.ItemIDs); err != nil {
+		http.Error(w, "Failed to delete items", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":  "ok",
+		"deleted": len(req.ItemIDs),
 	})
 }
 

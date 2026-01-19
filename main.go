@@ -2,8 +2,10 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -30,18 +32,19 @@ func main() {
 		log.Fatalf("Failed to create server: %v", err)
 	}
 
-	// Handle graceful shutdown.
+	// Handle graceful shutdown in goroutine.
 	go func() {
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 		<-sigChan
-		log.Println("Shutting down...")
+		log.Println("Received shutdown signal...")
 		srv.Stop()
-		db.Close()
-		os.Exit(0)
 	}()
 
-	if err := srv.Start(*addr); err != nil {
+	// Start server (blocks until shutdown).
+	if err := srv.Start(*addr); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatalf("Server error: %v", err)
 	}
+
+	log.Println("Goodbye!")
 }

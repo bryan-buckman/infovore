@@ -26,6 +26,11 @@ func New(path string) (*DB, error) {
 		conn.Close()
 		return nil, fmt.Errorf("set wal mode: %w", err)
 	}
+	// Set busy timeout to wait up to 5 seconds when database is locked.
+	if _, err := conn.Exec("PRAGMA busy_timeout=5000;"); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("set busy timeout: %w", err)
+	}
 	db := &DB{conn: conn}
 	if err := db.migrate(); err != nil {
 		conn.Close()
@@ -157,6 +162,71 @@ func (db *DB) GetAllFeeds() ([]model.Feed, error) {
 	return db.GetFeeds(nil)
 }
 
+// GetFeedsByFolderID returns feeds belonging to a specific folder.
+func (db *DB) GetFeedsByFolderID(folderID int64) ([]model.Feed, error) {
+	rows, err := db.conn.Query("SELECT id, folder_id, title, url, icon_url, last_fetched FROM feeds WHERE folder_id = ? ORDER BY title", folderID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var feeds []model.Feed
+	for rows.Next() {
+		var f model.Feed
+		var lastFetched sql.NullTime
+		if err := rows.Scan(&f.ID, &f.FolderID, &f.Title, &f.URL, &f.IconURL, &lastFetched); err != nil {
+			return nil, err
+		}
+		if lastFetched.Valid {
+			f.LastFetched = lastFetched.Time
+		}
+		feeds = append(feeds, f)
+	}
+	return feeds, rows.Err()
+}
+
+// GetUnfiledFeeds returns feeds that don't belong to any folder.
+func (db *DB) GetUnfiledFeeds() ([]model.Feed, error) {
+	rows, err := db.conn.Query("SELECT id, folder_id, title, url, icon_url, last_fetched FROM feeds WHERE folder_id IS NULL ORDER BY title")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var feeds []model.Feed
+	for rows.Next() {
+		var f model.Feed
+		var lastFetched sql.NullTime
+		if err := rows.Scan(&f.ID, &f.FolderID, &f.Title, &f.URL, &f.IconURL, &lastFetched); err != nil {
+			return nil, err
+		}
+		if lastFetched.Valid {
+			f.LastFetched = lastFetched.Time
+		}
+		feeds = append(feeds, f)
+	}
+	return feeds, rows.Err()
+}
+
+// GetFoldersWithFeeds returns all folders with their feeds populated.
+func (db *DB) GetFoldersWithFeeds() ([]model.FolderWithFeeds, error) {
+	folders, err := db.GetFolders()
+	if err != nil {
+		return nil, err
+	}
+
+	var result []model.FolderWithFeeds
+	for _, folder := range folders {
+		feeds, err := db.GetFeedsByFolderID(folder.ID)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, model.FolderWithFeeds{
+			Folder: folder,
+			Feeds:  feeds,
+		})
+	}
+	return result, nil
+}
+
 // CreateFeed adds a new feed. Returns the ID.
 func (db *DB) CreateFeed(folderID *int64, title, url string) (int64, error) {
 	res, err := db.conn.Exec("INSERT INTO feeds (folder_id, title, url) VALUES (?, ?, ?)", folderID, title, url)
@@ -181,6 +251,97 @@ func (db *DB) GetOrCreateFeed(folderID *int64, title, url string) (int64, bool, 
 func (db *DB) UpdateFeedLastFetched(feedID int64, t time.Time) error {
 	_, err := db.conn.Exec("UPDATE feeds SET last_fetched = ? WHERE id = ?", t, feedID)
 	return err
+}
+
+// GetFeedByID returns a single feed by its ID.
+func (db *DB) GetFeedByID(feedID int64) (*model.Feed, error) {
+	var f model.Feed
+	var lastFetched sql.NullTime
+	err := db.conn.QueryRow("SELECT id, folder_id, title, url, icon_url, last_fetched FROM feeds WHERE id = ?", feedID).
+		Scan(&f.ID, &f.FolderID, &f.Title, &f.URL, &f.IconURL, &lastFetched)
+	if err != nil {
+		return nil, err
+	}
+	if lastFetched.Valid {
+		f.LastFetched = lastFetched.Time
+	}
+	return &f, nil
+}
+
+// GetFolderByID returns a single folder by its ID.
+func (db *DB) GetFolderByID(folderID int64) (*model.Folder, error) {
+	var f model.Folder
+	err := db.conn.QueryRow("SELECT id, name, parent_id FROM folders WHERE id = ?", folderID).
+		Scan(&f.ID, &f.Name, &f.ParentID)
+	if err != nil {
+		return nil, err
+	}
+	return &f, nil
+}
+
+// DeleteFeed removes a feed and all its items (cascading).
+func (db *DB) DeleteFeed(feedID int64) error {
+	_, err := db.conn.Exec("DELETE FROM feeds WHERE id = ?", feedID)
+	return err
+}
+
+// DeleteFolder removes a folder and all its feeds (and their items).
+func (db *DB) DeleteFolder(folderID int64) error {
+	// First delete all feeds in the folder (items cascade via FK).
+	if _, err := db.conn.Exec("DELETE FROM feeds WHERE folder_id = ?", folderID); err != nil {
+		return err
+	}
+	// Then delete the folder itself.
+	_, err := db.conn.Exec("DELETE FROM folders WHERE id = ?", folderID)
+	return err
+}
+
+// MoveFeedToFolder updates a feed's folder assignment.
+func (db *DB) MoveFeedToFolder(feedID int64, folderID *int64) error {
+	_, err := db.conn.Exec("UPDATE feeds SET folder_id = ? WHERE id = ?", folderID, feedID)
+	return err
+}
+
+// DeleteReadItems deletes specific read items by their IDs.
+func (db *DB) DeleteReadItems(itemIDs []int64) error {
+	if len(itemIDs) == 0 {
+		return nil
+	}
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return err
+	}
+	stmt, err := tx.Prepare("DELETE FROM items WHERE id = ? AND is_read = 1")
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+	defer stmt.Close()
+	for _, id := range itemIDs {
+		if _, err := stmt.Exec(id); err != nil {
+			tx.Rollback()
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// GetItemsByFolderID returns all items for feeds in a specific folder.
+func (db *DB) GetItemsByFolderID(folderID int64, onlyUnread bool) ([]model.Item, error) {
+	query := `SELECT i.id, i.feed_id, i.guid, i.title, i.content, i.link, i.published_at, i.fetched_at, i.is_read
+		FROM items i
+		JOIN feeds f ON i.feed_id = f.id
+		WHERE f.folder_id = ?`
+	if onlyUnread {
+		query += " AND i.is_read = 0"
+	}
+	query += " ORDER BY i.published_at DESC"
+	rows, err := db.conn.Query(query, folderID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanItems(rows)
 }
 
 // --- Item Methods ---
