@@ -1,0 +1,30 @@
+# Build artifacts
+infovore
+infovore.exe
+golang-test-server
+
+# Database files
+*.db
+*.db-shm
+*.db-wal
+
+# Development files
+.devcontainer/
+.vscode/
+.git/
+.github/
+.claude/
+
+# IDE and OS files
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Go build cache
+/vendor/
+
+# Test coverage
+coverage.out
+coverage.html
