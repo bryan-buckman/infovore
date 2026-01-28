@@ -10,13 +10,16 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// DB wraps the SQLite connection.
-type DB struct {
+// SQLiteStore wraps the SQLite connection.
+type SQLiteStore struct {
 	conn *sql.DB
 }
 
-// New opens or creates an SQLite database at the given path.
-func New(path string) (*DB, error) {
+// Ensure SQLiteStore implements Store interface.
+var _ Store = (*SQLiteStore)(nil)
+
+// NewSQLite opens or creates an SQLite database at the given path.
+func NewSQLite(path string) (*SQLiteStore, error) {
 	conn, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
@@ -36,7 +39,7 @@ func New(path string) (*DB, error) {
 		conn.Close()
 		return nil, fmt.Errorf("set busy timeout: %w", err)
 	}
-	db := &DB{conn: conn}
+	db := &SQLiteStore{conn: conn}
 	if err := db.migrate(); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
@@ -45,11 +48,21 @@ func New(path string) (*DB, error) {
 }
 
 // Close closes the database connection.
-func (db *DB) Close() error {
+func (db *SQLiteStore) Close() error {
 	return db.conn.Close()
 }
 
-func (db *DB) migrate() error {
+// DatabaseType returns the database backend name.
+func (db *SQLiteStore) DatabaseType() string {
+	return "SQLite"
+}
+
+// SupportsHighConcurrency returns false for SQLite due to write locking.
+func (db *SQLiteStore) SupportsHighConcurrency() bool {
+	return false
+}
+
+func (db *SQLiteStore) migrate() error {
 	schema := `
 	CREATE TABLE IF NOT EXISTS folders (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -95,7 +108,7 @@ func (db *DB) migrate() error {
 // --- Folder Methods ---
 
 // GetFolders returns all folders ordered by name.
-func (db *DB) GetFolders() ([]model.Folder, error) {
+func (db *SQLiteStore) GetFolders() ([]model.Folder, error) {
 	rows, err := db.conn.Query("SELECT id, name, parent_id FROM folders ORDER BY name")
 	if err != nil {
 		return nil, err
@@ -113,7 +126,7 @@ func (db *DB) GetFolders() ([]model.Folder, error) {
 }
 
 // CreateFolder creates a new folder. Returns the ID.
-func (db *DB) CreateFolder(name string, parentID *int64) (int64, error) {
+func (db *SQLiteStore) CreateFolder(name string, parentID *int64) (int64, error) {
 	res, err := db.conn.Exec("INSERT INTO folders (name, parent_id) VALUES (?, ?)", name, parentID)
 	if err != nil {
 		return 0, err
@@ -122,7 +135,7 @@ func (db *DB) CreateFolder(name string, parentID *int64) (int64, error) {
 }
 
 // GetOrCreateFolder finds a folder by name and parent, or creates it.
-func (db *DB) GetOrCreateFolder(name string, parentID *int64) (int64, error) {
+func (db *SQLiteStore) GetOrCreateFolder(name string, parentID *int64) (int64, error) {
 	var id int64
 	var row *sql.Row
 	if parentID == nil {
@@ -140,7 +153,7 @@ func (db *DB) GetOrCreateFolder(name string, parentID *int64) (int64, error) {
 // --- Feed Methods ---
 
 // GetFeeds returns all feeds, optionally filtered by folder.
-func (db *DB) GetFeeds(folderID *int64) ([]model.Feed, error) {
+func (db *SQLiteStore) GetFeeds(folderID *int64) ([]model.Feed, error) {
 	var rows *sql.Rows
 	var err error
 	query := `SELECT f.id, f.folder_id, f.title, f.url, f.icon_url, f.last_fetched, f.last_error,
@@ -149,7 +162,7 @@ func (db *DB) GetFeeds(folderID *int64) ([]model.Feed, error) {
 	if folderID == nil {
 		rows, err = db.conn.Query(query + " ORDER BY f.title")
 	} else {
-		rows, err = db.conn.Query(query + " WHERE f.folder_id = ? ORDER BY f.title", *folderID)
+		rows, err = db.conn.Query(query+" WHERE f.folder_id = ? ORDER BY f.title", *folderID)
 	}
 	if err != nil {
 		return nil, err
@@ -175,12 +188,12 @@ func (db *DB) GetFeeds(folderID *int64) ([]model.Feed, error) {
 }
 
 // GetAllFeeds returns all feeds regardless of folder.
-func (db *DB) GetAllFeeds() ([]model.Feed, error) {
+func (db *SQLiteStore) GetAllFeeds() ([]model.Feed, error) {
 	return db.GetFeeds(nil)
 }
 
 // GetFeedsByFolderID returns feeds belonging to a specific folder.
-func (db *DB) GetFeedsByFolderID(folderID int64) ([]model.Feed, error) {
+func (db *SQLiteStore) GetFeedsByFolderID(folderID int64) ([]model.Feed, error) {
 	rows, err := db.conn.Query("SELECT id, folder_id, title, url, icon_url, last_fetched, last_error FROM feeds WHERE folder_id = ? ORDER BY title", folderID)
 	if err != nil {
 		return nil, err
@@ -206,7 +219,7 @@ func (db *DB) GetFeedsByFolderID(folderID int64) ([]model.Feed, error) {
 }
 
 // GetUnfiledFeeds returns feeds that don't belong to any folder.
-func (db *DB) GetUnfiledFeeds() ([]model.Feed, error) {
+func (db *SQLiteStore) GetUnfiledFeeds() ([]model.Feed, error) {
 	rows, err := db.conn.Query("SELECT id, folder_id, title, url, icon_url, last_fetched, last_error FROM feeds WHERE folder_id IS NULL ORDER BY title")
 	if err != nil {
 		return nil, err
@@ -232,7 +245,7 @@ func (db *DB) GetUnfiledFeeds() ([]model.Feed, error) {
 }
 
 // GetFoldersWithFeeds returns all folders with their feeds populated.
-func (db *DB) GetFoldersWithFeeds() ([]model.FolderWithFeeds, error) {
+func (db *SQLiteStore) GetFoldersWithFeeds() ([]model.FolderWithFeeds, error) {
 	folders, err := db.GetFolders()
 	if err != nil {
 		return nil, err
@@ -253,7 +266,7 @@ func (db *DB) GetFoldersWithFeeds() ([]model.FolderWithFeeds, error) {
 }
 
 // CreateFeed adds a new feed. Returns the ID.
-func (db *DB) CreateFeed(folderID *int64, title, url string) (int64, error) {
+func (db *SQLiteStore) CreateFeed(folderID *int64, title, url string) (int64, error) {
 	res, err := db.conn.Exec("INSERT INTO feeds (folder_id, title, url) VALUES (?, ?, ?)", folderID, title, url)
 	if err != nil {
 		return 0, err
@@ -262,7 +275,7 @@ func (db *DB) CreateFeed(folderID *int64, title, url string) (int64, error) {
 }
 
 // GetOrCreateFeed finds a feed by URL, or creates it.
-func (db *DB) GetOrCreateFeed(folderID *int64, title, url string) (int64, bool, error) {
+func (db *SQLiteStore) GetOrCreateFeed(folderID *int64, title, url string) (int64, bool, error) {
 	var id int64
 	err := db.conn.QueryRow("SELECT id FROM feeds WHERE url = ?", url).Scan(&id)
 	if err == sql.ErrNoRows {
@@ -273,25 +286,25 @@ func (db *DB) GetOrCreateFeed(folderID *int64, title, url string) (int64, bool, 
 }
 
 // UpdateFeedLastFetched updates the last_fetched timestamp for a feed.
-func (db *DB) UpdateFeedLastFetched(feedID int64, t time.Time) error {
+func (db *SQLiteStore) UpdateFeedLastFetched(feedID int64, t time.Time) error {
 	_, err := db.conn.Exec("UPDATE feeds SET last_fetched = ?, last_error = '' WHERE id = ?", t, feedID)
 	return err
 }
 
 // UpdateFeedTitle updates the title for a feed.
-func (db *DB) UpdateFeedTitle(feedID int64, title string) error {
+func (db *SQLiteStore) UpdateFeedTitle(feedID int64, title string) error {
 	_, err := db.conn.Exec("UPDATE feeds SET title = ? WHERE id = ?", title, feedID)
 	return err
 }
 
 // UpdateFeedError sets the last error message for a feed.
-func (db *DB) UpdateFeedError(feedID int64, errMsg string) error {
+func (db *SQLiteStore) UpdateFeedError(feedID int64, errMsg string) error {
 	_, err := db.conn.Exec("UPDATE feeds SET last_error = ? WHERE id = ?", errMsg, feedID)
 	return err
 }
 
 // GetFeedByID returns a single feed by its ID.
-func (db *DB) GetFeedByID(feedID int64) (*model.Feed, error) {
+func (db *SQLiteStore) GetFeedByID(feedID int64) (*model.Feed, error) {
 	var f model.Feed
 	var lastFetched sql.NullTime
 	var lastError sql.NullString
@@ -310,7 +323,7 @@ func (db *DB) GetFeedByID(feedID int64) (*model.Feed, error) {
 }
 
 // GetFolderByID returns a single folder by its ID.
-func (db *DB) GetFolderByID(folderID int64) (*model.Folder, error) {
+func (db *SQLiteStore) GetFolderByID(folderID int64) (*model.Folder, error) {
 	var f model.Folder
 	err := db.conn.QueryRow("SELECT id, name, parent_id FROM folders WHERE id = ?", folderID).
 		Scan(&f.ID, &f.Name, &f.ParentID)
@@ -321,13 +334,13 @@ func (db *DB) GetFolderByID(folderID int64) (*model.Folder, error) {
 }
 
 // DeleteFeed removes a feed and all its items (cascading).
-func (db *DB) DeleteFeed(feedID int64) error {
+func (db *SQLiteStore) DeleteFeed(feedID int64) error {
 	_, err := db.conn.Exec("DELETE FROM feeds WHERE id = ?", feedID)
 	return err
 }
 
 // DeleteFolder removes a folder and all its feeds (and their items).
-func (db *DB) DeleteFolder(folderID int64) error {
+func (db *SQLiteStore) DeleteFolder(folderID int64) error {
 	// First delete all feeds in the folder (items cascade via FK).
 	if _, err := db.conn.Exec("DELETE FROM feeds WHERE folder_id = ?", folderID); err != nil {
 		return err
@@ -338,13 +351,13 @@ func (db *DB) DeleteFolder(folderID int64) error {
 }
 
 // MoveFeedToFolder updates a feed's folder assignment.
-func (db *DB) MoveFeedToFolder(feedID int64, folderID *int64) error {
+func (db *SQLiteStore) MoveFeedToFolder(feedID int64, folderID *int64) error {
 	_, err := db.conn.Exec("UPDATE feeds SET folder_id = ? WHERE id = ?", folderID, feedID)
 	return err
 }
 
 // DeleteReadItems deletes specific read items by their IDs.
-func (db *DB) DeleteReadItems(itemIDs []int64) error {
+func (db *SQLiteStore) DeleteReadItems(itemIDs []int64) error {
 	if len(itemIDs) == 0 {
 		return nil
 	}
@@ -368,7 +381,7 @@ func (db *DB) DeleteReadItems(itemIDs []int64) error {
 }
 
 // GetItemsByFolderID returns all items for feeds in a specific folder.
-func (db *DB) GetItemsByFolderID(folderID int64, onlyUnread bool) ([]model.Item, error) {
+func (db *SQLiteStore) GetItemsByFolderID(folderID int64, onlyUnread bool) ([]model.Item, error) {
 	query := `SELECT i.id, i.feed_id, i.guid, i.title, i.content, i.link, i.published_at, i.fetched_at, i.is_read
 		FROM items i
 		JOIN feeds f ON i.feed_id = f.id
@@ -388,7 +401,7 @@ func (db *DB) GetItemsByFolderID(folderID int64, onlyUnread bool) ([]model.Item,
 // --- Item Methods ---
 
 // AddItem inserts a new item if GUID doesn't exist for that feed. Returns ID and whether it was new.
-func (db *DB) AddItem(item *model.Item) (int64, bool, error) {
+func (db *SQLiteStore) AddItem(item *model.Item) (int64, bool, error) {
 	res, err := db.conn.Exec(`
 		INSERT INTO items (feed_id, guid, title, content, link, published_at, fetched_at, is_read)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -403,7 +416,7 @@ func (db *DB) AddItem(item *model.Item) (int64, bool, error) {
 }
 
 // GetItems returns items for a feed, ordered by published date desc.
-func (db *DB) GetItems(feedID int64, onlyUnread bool) ([]model.Item, error) {
+func (db *SQLiteStore) GetItems(feedID int64, onlyUnread bool) ([]model.Item, error) {
 	query := "SELECT id, feed_id, guid, title, content, link, published_at, fetched_at, is_read FROM items WHERE feed_id = ?"
 	if onlyUnread {
 		query += " AND is_read = 0"
@@ -418,7 +431,7 @@ func (db *DB) GetItems(feedID int64, onlyUnread bool) ([]model.Item, error) {
 }
 
 // GetAllItems returns all items for the sidebar/home stream.
-func (db *DB) GetAllItems(onlyUnread bool) ([]model.Item, error) {
+func (db *SQLiteStore) GetAllItems(onlyUnread bool) ([]model.Item, error) {
 	query := "SELECT id, feed_id, guid, title, content, link, published_at, fetched_at, is_read FROM items"
 	if onlyUnread {
 		query += " WHERE is_read = 0"
@@ -452,13 +465,13 @@ func scanItems(rows *sql.Rows) ([]model.Item, error) {
 }
 
 // MarkItemRead marks an item as read.
-func (db *DB) MarkItemRead(itemID int64) error {
+func (db *SQLiteStore) MarkItemRead(itemID int64) error {
 	_, err := db.conn.Exec("UPDATE items SET is_read = 1 WHERE id = ?", itemID)
 	return err
 }
 
 // MarkItemsRead marks multiple items as read.
-func (db *DB) MarkItemsRead(itemIDs []int64) error {
+func (db *SQLiteStore) MarkItemsRead(itemIDs []int64) error {
 	if len(itemIDs) == 0 {
 		return nil
 	}
@@ -482,7 +495,7 @@ func (db *DB) MarkItemsRead(itemIDs []int64) error {
 }
 
 // CleanupReadItems deletes all items marked as read.
-func (db *DB) CleanupReadItems() (int64, error) {
+func (db *SQLiteStore) CleanupReadItems() (int64, error) {
 	res, err := db.conn.Exec("DELETE FROM items WHERE is_read = 1")
 	if err != nil {
 		return 0, err
@@ -493,20 +506,20 @@ func (db *DB) CleanupReadItems() (int64, error) {
 // --- Settings Methods ---
 
 // GetSetting retrieves a setting value.
-func (db *DB) GetSetting(key string) (string, error) {
+func (db *SQLiteStore) GetSetting(key string) (string, error) {
 	var val string
 	err := db.conn.QueryRow("SELECT value FROM settings WHERE key = ?", key).Scan(&val)
 	return val, err
 }
 
 // SetSetting saves a setting.
-func (db *DB) SetSetting(key, value string) error {
+func (db *SQLiteStore) SetSetting(key, value string) error {
 	_, err := db.conn.Exec("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = ?", key, value, value)
 	return err
 }
 
 // GetPollingInterval returns the polling interval in minutes, with a minimum of 15.
-func (db *DB) GetPollingInterval() (int, error) {
+func (db *SQLiteStore) GetPollingInterval() (int, error) {
 	val, err := db.GetSetting(model.SettingPollingInterval)
 	if err != nil {
 		return 15, nil // default

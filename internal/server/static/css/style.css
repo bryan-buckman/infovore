@@ -132,14 +132,12 @@ body {
 
 .folder-feeds {
   padding-left: 1rem;
-  overflow: hidden;
-  transition: max-height 0.2s ease-out;
-  max-height: 1000px;
+  overflow: visible;
   min-height: 8px;
 }
 
 .folder-feeds.collapsed {
-  max-height: 0;
+  display: none;
 }
 
 .folder-feeds .feed-item {
@@ -576,6 +574,47 @@ body {
 
 .modal-footer {
   gap: 0.5rem;
+}
+
+.database-info {
+  border-top: 1px solid var(--border);
+  padding-top: 1rem;
+  margin-top: 0.5rem;
+}
+
+.database-info input {
+  margin-bottom: 0.5rem;
+}
+
+.database-info .btn {
+  margin-bottom: 0.5rem;
+}
+
+.db-type-badge {
+  display: inline-block;
+  padding: 0.125rem 0.5rem;
+  border-radius: var(--radius);
+  font-size: 0.75rem;
+  font-weight: 500;
+  margin-left: 0.5rem;
+  vertical-align: middle;
+}
+
+.db-sqlite {
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+
+.db-postgres {
+  background: rgba(88, 166, 255, 0.15);
+  color: var(--accent);
+}
+
+.db-hint {
+  display: block;
+  margin-top: 0.5rem;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
 }
 
 @media (max-width: 768px) {

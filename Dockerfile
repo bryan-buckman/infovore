@@ -36,5 +36,32 @@ USER infovore
 # Expose the web port
 EXPOSE 8080
 
-# Default command
-CMD ["./infovore", "-addr", ":8080", "-db", "/data/infovore.db"]
+# Database Configuration:
+# The app reads DB_URL from environment variables or /data/.env file.
+# You can also configure the database via the web UI Settings panel.
+#
+# Options:
+#   SQLite (default): Leave DB_URL empty, uses /data/infovore.db
+#   PostgreSQL: Set DB_URL=postgres://user:pass@host:5432/dbname
+#
+# Configuration methods:
+#   1. Environment variable: docker run -e DB_URL="postgres://..."
+#   2. .env file: Mount a ConfigMap/Secret to /data/.env
+#   3. Web UI: Go to Settings and enter the database URL
+#
+# Example docker run commands:
+#   SQLite:    docker run -p 8080:8080 -v infovore-data:/data infovore
+#   PostgreSQL: docker run -p 8080:8080 -v infovore-data:/data -e DB_URL="postgres://..." infovore
+#
+# Kubernetes example (mount .env from Secret):
+#   volumeMounts:
+#     - name: db-config
+#       mountPath: /data/.env
+#       subPath: .env
+#   volumes:
+#     - name: db-config
+#       secret:
+#         secretName: infovore-db
+
+# Default command uses SQLite with data directory
+CMD ["./infovore", "-addr", ":8080", "-db", "/data/infovore.db", "-data-dir", "/data"]

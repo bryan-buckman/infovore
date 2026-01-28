@@ -29,3 +29,7 @@ bin/
 golang-test-server
 infovore
 infovore.exe
+
+# Environment files (may contain database credentials)
+.env
+.env.local

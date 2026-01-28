@@ -2,6 +2,7 @@
 package server
 
 import (
+	"bufio"
 	"context"
 	"embed"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -30,7 +32,7 @@ var staticFS embed.FS
 
 // Server is the main HTTP server.
 type Server struct {
-	db         *database.DB
+	db         database.Store
 	fetcher    *rss.Fetcher
 	poller     *rss.Poller
 	router     chi.Router
@@ -39,7 +41,7 @@ type Server struct {
 }
 
 // New creates a new server.
-func New(db *database.DB) (*Server, error) {
+func New(db database.Store) (*Server, error) {
 	tmpl, err := template.New("").Funcs(template.FuncMap{
 		"timeAgo":  timeAgo,
 		"safeHTML": func(s string) template.HTML { return template.HTML(s) },
@@ -90,6 +92,9 @@ func (s *Server) setupRoutes() {
 		r.Delete("/folder/{folderID}", s.handleDeleteFolder)
 		r.Post("/feed/{feedID}/move", s.handleMoveFeed)
 		r.Post("/feed", s.handleAddFeed)
+		r.Post("/folder", s.handleAddFolder)
+		r.Get("/database-settings", s.handleGetDatabaseSettings)
+		r.Post("/database-settings", s.handleSaveDatabaseSettings)
 	})
 
 	s.router = r
@@ -137,6 +142,7 @@ func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 		"Items":            items,
 		"PollingInterval":  interval,
 		"PageTitle":        "All Items",
+		"DatabaseType":     s.db.DatabaseType(),
 	}
 	s.render(w, "layout.html", data)
 }
@@ -166,6 +172,7 @@ func (s *Server) handleFeed(w http.ResponseWriter, r *http.Request) {
 		"PollingInterval":  interval,
 		"PageTitle":        pageTitle,
 		"FeedError":        feedError,
+		"DatabaseType":     s.db.DatabaseType(),
 	}
 	s.render(w, "layout.html", data)
 }
@@ -192,6 +199,7 @@ func (s *Server) handleFolder(w http.ResponseWriter, r *http.Request) {
 		"CurrentFolderID":  folderID,
 		"PollingInterval":  interval,
 		"PageTitle":        pageTitle,
+		"DatabaseType":     s.db.DatabaseType(),
 	}
 	s.render(w, "layout.html", data)
 }
@@ -557,6 +565,126 @@ func (s *Server) handleAddFeed(w http.ResponseWriter, r *http.Request) {
 		"status":  "ok",
 		"feed_id": feedID,
 		"is_new":  isNew,
+	})
+}
+
+func (s *Server) handleAddFolder(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Name     string `json:"name"`
+		ParentID *int64 `json:"parent_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+	if req.Name == "" {
+		http.Error(w, "Name is required", http.StatusBadRequest)
+		return
+	}
+
+	folderID, err := s.db.CreateFolder(req.Name, req.ParentID)
+	if err != nil {
+		http.Error(w, "Failed to create folder", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":    "ok",
+		"folder_id": folderID,
+	})
+}
+
+func (s *Server) handleGetDatabaseSettings(w http.ResponseWriter, r *http.Request) {
+	envFilePath := os.Getenv("INFOVORE_ENV_FILE")
+	if envFilePath == "" {
+		envFilePath = ".env"
+	}
+
+	// Read current DB_URL from .env file (masked for display)
+	dbURL := ""
+	if file, err := os.Open(envFilePath); err == nil {
+		defer file.Close()
+		scanner := bufio.NewScanner(file)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if strings.HasPrefix(line, "DB_URL=") {
+				dbURL = strings.TrimPrefix(line, "DB_URL=")
+				// Remove quotes if present
+				if len(dbURL) >= 2 && ((dbURL[0] == '"' && dbURL[len(dbURL)-1] == '"') ||
+					(dbURL[0] == '\'' && dbURL[len(dbURL)-1] == '\'')) {
+					dbURL = dbURL[1 : len(dbURL)-1]
+				}
+				break
+			}
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"db_url":        dbURL,
+		"database_type": s.db.DatabaseType(),
+		"env_file":      envFilePath,
+	})
+}
+
+func (s *Server) handleSaveDatabaseSettings(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		DBURL string `json:"db_url"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	envFilePath := os.Getenv("INFOVORE_ENV_FILE")
+	if envFilePath == "" {
+		envFilePath = ".env"
+	}
+
+	// Read existing .env file content (preserving other variables)
+	existingLines := []string{}
+	dbURLFound := false
+
+	if file, err := os.Open(envFilePath); err == nil {
+		scanner := bufio.NewScanner(file)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if strings.HasPrefix(strings.TrimSpace(line), "DB_URL=") {
+				dbURLFound = true
+				if req.DBURL != "" {
+					existingLines = append(existingLines, fmt.Sprintf("DB_URL=%s", req.DBURL))
+				}
+				// If empty, skip the line (remove the setting)
+			} else {
+				existingLines = append(existingLines, line)
+			}
+		}
+		file.Close()
+	}
+
+	// Add DB_URL if it wasn't found and we have a value
+	if !dbURLFound && req.DBURL != "" {
+		existingLines = append(existingLines, fmt.Sprintf("DB_URL=%s", req.DBURL))
+	}
+
+	// Write the .env file
+	file, err := os.Create(envFilePath)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to write .env file: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer file.Close()
+
+	for _, line := range existingLines {
+		file.WriteString(line + "\n")
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":       "ok",
+		"env_file":     envFilePath,
+		"restart_hint": "Restart the application to apply database changes",
 	})
 }
 

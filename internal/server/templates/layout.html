@@ -67,7 +67,9 @@
                 <h2>Settings</h2><button class="modal-close" id="closeSettings">&times;</button>
             </div>
             <div class="modal-body">
-                <div class="form-group"><button class="btn btn-primary" id="addFeedSettingsBtn">➕ Add Feed</button>
+                <div class="form-group">
+                    <button class="btn btn-primary" id="addFeedSettingsBtn">➕ Add Feed</button>
+                    <button class="btn btn-secondary" id="addFolderSettingsBtn">📁 Add Folder</button>
                 </div>
                 <div class="form-group"><label>Polling Interval (min, ≥15)</label><input type="number"
                         id="pollingInterval" min="15" value="{{.PollingInterval}}"></div>
@@ -76,6 +78,12 @@
                 <div class="form-group"><label>Export OPML</label><a href="/api/export-opml" class="btn btn-secondary"
                         download>Export</a></div>
                 <div class="form-group"><button class="btn btn-danger" id="cleanupBtn">Delete Read Items</button></div>
+                <div class="form-group database-info">
+                    <label>Database <span class="db-type-badge {{if eq .DatabaseType "PostgreSQL"}}db-postgres{{else}}db-sqlite{{end}}">{{.DatabaseType}}</span></label>
+                    <input type="text" id="dbUrlInput" placeholder="postgres://user:pass@host:5432/dbname or leave empty for SQLite">
+                    <button class="btn btn-secondary" id="saveDbBtn">Save Database URL</button>
+                    <small class="db-hint">Changes require application restart. Leave empty to use SQLite.</small>
+                </div>
             </div>
             <div class="modal-footer"><button class="btn btn-primary" id="saveSettings">Save</button></div>
         </div>
@@ -117,6 +125,18 @@
                 <input type="hidden" id="addFeedFolderId" value="">
             </div>
             <div class="modal-footer"><button class="btn btn-primary" id="submitAddFeed">Add Feed</button></div>
+        </div>
+    </div>
+    <div class="modal-overlay" id="addFolderModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h2>Add Folder</h2><button class="modal-close" id="closeAddFolder">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group"><label>Folder Name</label><input type="text" id="folderNameInput"
+                        placeholder="My Folder"></div>
+            </div>
+            <div class="modal-footer"><button class="btn btn-primary" id="submitAddFolder">Create Folder</button></div>
         </div>
     </div>
     <script src="/static/js/app.js"></script>

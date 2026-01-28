@@ -38,6 +38,13 @@
     const addFeedSettingsBtn = document.getElementById('addFeedSettingsBtn');
     const addFeedFolderBtn = document.getElementById('addFeedFolderBtn');
 
+    // Add Folder modal
+    const addFolderModal = document.getElementById('addFolderModal');
+    const closeAddFolder = document.getElementById('closeAddFolder');
+    const folderNameInput = document.getElementById('folderNameInput');
+    const submitAddFolder = document.getElementById('submitAddFolder');
+    const addFolderSettingsBtn = document.getElementById('addFolderSettingsBtn');
+
     // Sidebar toggle (mobile)
     if (sidebarToggle) sidebarToggle.onclick = () => sidebar.classList.toggle('open');
 
@@ -316,6 +323,115 @@
     feedUrlInput?.addEventListener('keypress', e => {
         if (e.key === 'Enter') submitAddFeed?.click();
     });
+
+    // Add Folder modal helpers
+    function openAddFolderModal() {
+        if (folderNameInput) folderNameInput.value = '';
+        addFolderModal?.classList.add('active');
+        folderNameInput?.focus();
+    }
+
+    function closeAddFolderModal() {
+        addFolderModal?.classList.remove('active');
+    }
+
+    // Add Folder from settings menu
+    if (addFolderSettingsBtn) {
+        addFolderSettingsBtn.onclick = () => {
+            settingsModal?.classList.remove('active');
+            openAddFolderModal();
+        };
+    }
+
+    // Add Folder modal close handlers
+    if (closeAddFolder) closeAddFolder.onclick = closeAddFolderModal;
+    addFolderModal?.addEventListener('click', e => { if (e.target === addFolderModal) closeAddFolderModal(); });
+
+    // Submit Add Folder
+    if (submitAddFolder) {
+        submitAddFolder.onclick = async () => {
+            const name = folderNameInput?.value?.trim();
+            if (!name) {
+                showToast('Please enter a folder name');
+                return;
+            }
+
+            closeAddFolderModal();
+            showToast('Creating folder...', 5000);
+
+            try {
+                const res = await fetch('/api/folder', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name })
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    showToast('Folder created');
+                    setTimeout(() => location.reload(), 500);
+                } else {
+                    showToast(data.error || 'Failed to create folder');
+                }
+            } catch (e) {
+                showToast('Error creating folder');
+            }
+        };
+    }
+
+    // Allow Enter key to submit folder
+    folderNameInput?.addEventListener('keypress', e => {
+        if (e.key === 'Enter') submitAddFolder?.click();
+    });
+
+    // Database settings
+    const dbUrlInput = document.getElementById('dbUrlInput');
+    const saveDbBtn = document.getElementById('saveDbBtn');
+
+    // Load current database URL when settings modal opens
+    if (menuBtn && dbUrlInput) {
+        menuBtn.addEventListener('click', async () => {
+            try {
+                const res = await fetch('/api/database-settings');
+                if (res.ok) {
+                    const data = await res.json();
+                    dbUrlInput.value = data.db_url || '';
+                }
+            } catch (e) {
+                console.error('Failed to load database settings:', e);
+            }
+        });
+    }
+
+    // Save database URL
+    if (saveDbBtn) {
+        saveDbBtn.onclick = async () => {
+            const dbUrl = dbUrlInput?.value?.trim() || '';
+
+            // Validate URL format if provided
+            if (dbUrl && !dbUrl.startsWith('postgres://') && !dbUrl.startsWith('postgresql://') && !dbUrl.startsWith('sqlite://')) {
+                showToast('Invalid URL. Use postgres://... or sqlite://... or leave empty for default SQLite');
+                return;
+            }
+
+            showToast('Saving database settings...');
+
+            try {
+                const res = await fetch('/api/database-settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ db_url: dbUrl })
+                });
+                const data = await res.json();
+                if (res.ok) {
+                    showToast('Database settings saved. Restart to apply changes.', 5000);
+                } else {
+                    showToast(data.error || 'Failed to save database settings');
+                }
+            } catch (e) {
+                showToast('Error saving database settings');
+            }
+        };
+    }
 
     // Toast helper
     function showToast(msg, duration = 3000) {
