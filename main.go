@@ -68,8 +68,7 @@ func getEnvFilePath() string {
 
 func main() {
 	addr := flag.String("addr", ":8080", "HTTP server address")
-	dbPath := flag.String("db", "infovore.db", "SQLite database path (used if -db-url not set)")
-	dbURL := flag.String("db-url", "", "Database URL (postgres://user:pass@host:port/dbname or sqlite:///path/to/db.sqlite)")
+	dbURL := flag.String("db-url", "", "PostgreSQL connection URL (postgres://user:pass@host:port/dbname)")
 	dataDir := flag.String("data-dir", "", "Data directory for .env file (default: /data or current directory)")
 	flag.Parse()
 
@@ -95,25 +94,19 @@ func main() {
 	// Store the env file path for the server to use when saving settings
 	os.Setenv("INFOVORE_ENV_FILE", envFilePath)
 
-	// Determine database type from URL or use SQLite default
+	// PostgreSQL is required
+	if *dbURL == "" {
+		log.Fatalf("Database URL is required. Set DB_URL environment variable or use -db-url flag.\n" +
+			"  Example: DB_URL=postgres://user:pass@localhost:5432/infovore?sslmode=disable")
+	}
+	if !strings.HasPrefix(*dbURL, "postgres://") && !strings.HasPrefix(*dbURL, "postgresql://") {
+		log.Fatalf("Only PostgreSQL is supported. URL must start with postgres:// or postgresql://")
+	}
+
+	log.Printf("Connecting to PostgreSQL database...")
 	var db database.Store
 	var err error
-
-	if *dbURL != "" {
-		if strings.HasPrefix(*dbURL, "postgres://") || strings.HasPrefix(*dbURL, "postgresql://") {
-			log.Printf("Connecting to PostgreSQL database...")
-			db, err = database.NewPostgres(*dbURL)
-		} else if strings.HasPrefix(*dbURL, "sqlite://") {
-			path := strings.TrimPrefix(*dbURL, "sqlite://")
-			log.Printf("Opening SQLite database: %s", path)
-			db, err = database.NewSQLite(path)
-		} else {
-			log.Fatalf("Unsupported database URL scheme. Use postgres:// or sqlite://")
-		}
-	} else {
-		log.Printf("Opening SQLite database: %s", *dbPath)
-		db, err = database.NewSQLite(*dbPath)
-	}
+	db, err = database.NewPostgres(*dbURL)
 
 	if err != nil {
 		log.Fatalf("Failed to open database: %v", err)

@@ -132,12 +132,22 @@ Add to `internal/database/store.go`:
 
 ```go
 // Kalshi report storage
-SaveKalshiReport(html string) error          // Insert report, delete all previous
-GetLatestKalshiReport() (string, time.Time, error)  // Get latest report HTML + timestamp
+SaveKalshiReport(html string) error                    // Insert report, delete all previous
+GetLatestKalshiReport() (string, time.Time, error)     // Get latest report HTML + timestamp
 
 // Kalshi scan log
 AddKalshiScanLog(output string, scanErr string) error  // Insert log entry, purge old
 GetKalshiScanLog(limit int) ([]ScanLogEntry, error)    // Get recent log entries
+```
+
+Add the `ScanLogEntry` type to `store.go`:
+```go
+type ScanLogEntry struct {
+    ID        int64
+    Output    string
+    Error     string
+    CreatedAt time.Time
+}
 ```
 
 ---
@@ -174,11 +184,11 @@ The Settings page is a third tab-level route (`GET /settings`) but accessed via 
 │  ┌─────────────────────────────────────────────┐    │
 │  │ API Key ID:    [_________________________ ] │    │
 │  │ Environment:   (●) Production  ( ) Demo     │    │
-│  │ Private Key:                                │    │
+│  │ Private Key (RSA PEM):                      │    │
 │  │ ┌─────────────────────────────────────────┐ │    │
-│  │ │ -----BEGIN EC PRIVATE KEY-----          │ │    │
+│  │ │ -----BEGIN RSA PRIVATE KEY-----         │ │    │
 │  │ │ (paste PEM content here)                │ │    │
-│  │ │ -----END EC PRIVATE KEY-----            │ │    │
+│  │ │ -----END RSA PRIVATE KEY-----           │ │    │
 │  │ └─────────────────────────────────────────┘ │    │
 │  │ Status: ● Configured  [Test Connection]     │    │
 │  │                                             │    │
@@ -220,7 +230,7 @@ Note: `kalshi_private_key` is never returned in GET responses — only a boolean
 ```json
 {
   "kalshi_api_key_id": "new-key",
-  "kalshi_private_key": "-----BEGIN EC PRIVATE KEY-----\n...",
+  "kalshi_private_key": "-----BEGIN RSA PRIVATE KEY-----\n...",
   "kalshi_categories": ["Politics", "Sports"]
 }
 ```
@@ -249,32 +259,7 @@ The Kalshi report's current hamburger menu settings dialog (category checkboxes 
 
 ### Refactoring the Kalshi Config Package
 
-**File: `internal/kalshi/config/config.go`** — rewrite to read from the database Store instead of environment variables:
-
-```go
-func LoadFromStore(store database.Store) (*Config, error) {
-    keyID, _ := store.GetSetting("kalshi_api_key_id")
-    if keyID == "" {
-        return nil, fmt.Errorf("Kalshi API key not configured (set in Settings)")
-    }
-
-    privateKey, _ := store.GetSetting("kalshi_private_key")
-    if privateKey == "" {
-        return nil, fmt.Errorf("Kalshi private key not configured (set in Settings)")
-    }
-
-    env, _ := store.GetSetting("kalshi_environment")
-    if env == "" {
-        env = "prod"
-    }
-
-    // ... build Config with BaseURL based on env
-    // Private key is now PEM content string, not a file path
-    // Auth signer needs updating to accept key bytes instead of file path
-}
-```
-
-**File: `internal/kalshi/auth/`** — update the signer to accept PEM bytes directly (currently it reads from a file path). Add a `NewSignerFromBytes(pemData []byte)` constructor alongside the existing file-based one (keep file-based for `--local` mode).
+See **Step 5** in the Implementation Steps section for full details on `config.LoadFromStore()`, `auth.NewSignerFromBytes()`, and the updated `client.New()` constructor chain.
 
 ---
 
@@ -363,7 +348,7 @@ All styling uses CSS custom properties on `:root`, with dark mode overrides via 
   /* Text */
   --text:           #f0f6fc;
   --text-muted:     #8b949e;
-  --text-on-primary: #000000;
+  --text-on-primary: #ffffff;
 
   /* Borders & shadows — deeper for dark mode */
   --border:         #30363d;
@@ -427,26 +412,50 @@ Copy these packages from `kalshi_API` into `infovore`:
 
 ```
 kalshi_API/internal/client/     → infovore/internal/kalshi/client/
+  client.go           — API client with rate limiting (Get, Post, GetSeriesList, GetMarkets,
+                        GetBalance, GetPositions, GetMarket, GetSettlements, GetFills, GetCategories)
 kalshi_API/internal/auth/       → infovore/internal/kalshi/auth/
+  signer.go           — RSA-PSS request signing (NewSigner, SignRequest)
+  signer_test.go      — signer unit tests
 kalshi_API/internal/config/     → infovore/internal/kalshi/config/
+  config.go           — credential loading (currently env-var-based Load())
 kalshi_API/internal/scanner/    → infovore/internal/kalshi/scanner/
+  scanner.go          — market filtering (FilterByPriceRange*, SortByAskPrice)
+  kelly.go            — Kelly criterion math (CalculateKelly, LongshotBiasEdge)
+  kelly_test.go       — Kelly criterion tests
+  report.go           — HTML report generation (~1750 lines, contains the full HTML/CSS/JS template
+                        as a Go template string, plus types: ReportMarket, EnrichedPosition,
+                        CategoryView, ReportData, and func GenerateHTMLReport with 11 parameters)
 kalshi_API/pkg/models/          → infovore/internal/kalshi/models/
+  models.go           — API response types (Market, Series, Settlement, Fill, MarketPosition, etc.)
 ```
 
-Update all import paths from `github.com/bryanedds/kalshi-api/...` to `github.com/bryanedds/infovore/internal/kalshi/...`.
+Update all import paths from `github.com/bryanedds/kalshi-api/...` to `github.com/bryan-buckman/infovore/internal/kalshi/...`. (The Kalshi module is `github.com/bryanedds/kalshi-api`; the Infovore module is `github.com/bryan-buckman/infovore`.)
 
-Add Kalshi's Go dependencies to `infovore/go.mod` (the Kalshi project uses only stdlib + crypto, so minimal additions).
+Add Kalshi's Go dependencies to `infovore/go.mod`. The Kalshi packages use only stdlib + `crypto` — no third-party deps. (`github.com/joho/godotenv` is only used in `cmd/kalshi/main.go` which is not being copied.)
+
+**Import path updates** — files that contain `github.com/bryanedds/kalshi-api/` imports:
+- `internal/kalshi/client/client.go` — imports `auth`, `config`, `models` (3 imports to update)
+- `internal/kalshi/scanner/scanner.go` — imports `models` (1 import)
+- `internal/kalshi/scanner/report.go` — imports `models` (1 import)
+- `internal/kalshi/scanner/kelly_test.go` — no cross-package imports (just `testing`)
+- `internal/kalshi/auth/signer_test.go` — no cross-package imports (just `testing`, `crypto`)
+- `internal/kalshi/config/config.go` — no cross-package imports (just `os`, `fmt`, `strings`)
 
 **Verification**: `go build ./...` should pass after import path updates.
 
 ### Step 2: Remove SQLite, make PostgreSQL mandatory
 
 - Delete `internal/database/sqlite.go`
-- Remove `modernc.org/sqlite` from `go.mod`
-- Remove the SQLite fallback in `main.go`
-- Update `main.go` to require `DB_URL` (from env var or `.env`)
-- If no `DB_URL` is set, serve the first-run setup page on all routes
-- Remove `-db` CLI flag (SQLite path), keep `-db-url` as an alternative to env var
+- Remove `modernc.org/sqlite` from `go.mod` and run `go mod tidy`
+- In `main.go`:
+  - Remove `dbPath := flag.String("db", ...)` flag
+  - Remove the `strings.HasPrefix(*dbURL, "sqlite://")` branch (lines ~106-109)
+  - Remove the `else` fallback `database.NewSQLite(*dbPath)` (lines ~113-116)
+  - Remove the `database.NewSQLite` import usage
+  - If `*dbURL` is empty after checking env: serve first-run setup page on all routes instead of `log.Fatalf`
+- Keep `dbURL` flag (`-db-url`) and `DB_URL` env var as alternative input methods
+- If no `DB_URL` is set, serve the first-run setup page on all routes (see First-Run Setup section above)
 
 ### Step 3: Add Kalshi database tables and store methods
 
@@ -454,6 +463,18 @@ Add Kalshi's Go dependencies to `infovore/go.mod` (the Kalshi project uses only 
 - Add `kalshi_reports` and `kalshi_scan_log` tables to the migration
 - Add new settings key defaults for Kalshi config
 - Implement `SaveKalshiReport`, `GetLatestKalshiReport`, `AddKalshiScanLog`, `GetKalshiScanLog`
+
+`SaveKalshiReport` should delete all previous reports and insert the new one in a single transaction:
+```sql
+DELETE FROM kalshi_reports;
+INSERT INTO kalshi_reports (html) VALUES ($1);
+```
+
+`AddKalshiScanLog` should insert then purge old entries:
+```sql
+INSERT INTO kalshi_scan_log (output, error) VALUES ($1, $2);
+DELETE FROM kalshi_scan_log WHERE id NOT IN (SELECT id FROM kalshi_scan_log ORDER BY created_at DESC LIMIT 50);
+```
 
 **Update: `internal/database/store.go`**
 - Add new methods to the Store interface
@@ -469,20 +490,141 @@ Contains all CSS custom properties for both light and dark modes as defined in t
 - Replace all hardcoded colors with `var(--token)` references
 
 **Update: `internal/kalshi/scanner/report.go`** (Kalshi report template CSS)
-- Remove inline `:root { }` custom properties block
-- Add `<link rel="stylesheet" href="/static/css/theme.css">` in `<head>`
-- Replace all hardcoded colors with `var(--token)` references
-- For `--local` mode: embed theme CSS inline
 
-### Step 5: Refactor Kalshi config to read from database
+**Note**: This file is ~1750 lines. The HTML/CSS/JS template is a raw string constant inside the Go file. There are approximately 80-100 hardcoded color values to replace with `var(--token)` references. Use search-and-replace systematically:
+- `#2563eb` → `var(--primary)` (appears ~15 times)
+- `#1d4ed8` → `var(--primary-dark)` (appears ~5 times)
+- `#f8fafc` → `var(--bg)` (appears ~3 times)
+- `#ffffff` / `white` → `var(--bg-card)` (appears ~10 times)
+- `#1e293b` → `var(--text)` (appears ~8 times)
+- `#64748b` → `var(--text-muted)` (appears ~10 times)
+- `#e2e8f0` → `var(--border)` (appears ~8 times)
+- `#16a34a` → `var(--success)` (appears ~5 times)
+- `#dc2626` → `var(--danger)` (appears ~5 times)
+- Other one-off values: map to nearest token or keep if unique to a specific component
+- **Do not replace** colors inside the Kelly criterion dark panel (`.kelly-card`) — those keep their hardcoded gradient
+
+Steps:
+- Remove the existing `:root { }` custom properties block from the template
+- Add `<link rel="stylesheet" href="/static/css/theme.css">` in `<head>`
+- Replace all hardcoded colors with `var(--token)` references as listed above
+- For standalone file output (if `--local` mode is re-added): embed the full theme CSS as an inline `<style>` block
+
+### Step 5: Refactor Kalshi config and auth to read from database
+
+The current constructor chain is:
+```
+config.Load()           → reads env vars → Config{APIKeyID, PrivateKeyPath, Environment, BaseURL}
+client.New(cfg)         → auth.NewSigner(cfg.APIKeyID, cfg.PrivateKeyPath)
+auth.NewSigner(id,path) → os.ReadFile(path) → pem.Decode → x509.ParsePKCS8/PKCS1 → *rsa.PrivateKey
+```
+
+For DB-stored credentials, the chain becomes:
+```
+config.LoadFromStore(store) → reads settings table → Config{APIKeyID, PrivateKeyData, Environment, BaseURL}
+client.New(cfg)             → auth.NewSignerFromBytes(cfg.APIKeyID, cfg.PrivateKeyData)
+auth.NewSignerFromBytes(id,pemBytes) → pem.Decode → x509.Parse → *rsa.PrivateKey
+```
 
 **Update: `internal/kalshi/config/config.go`**
-- Add `LoadFromStore(store database.Store)` that reads credentials from the `settings` table
-- Keep `Load()` (env var based) for `--local` mode only
 
-**Update: `internal/kalshi/auth/`**
-- Add `NewSignerFromBytes(pemData []byte)` alongside the existing file-path-based constructor
-- The DB-stored private key is PEM content (string), not a file path
+Add a `PrivateKeyData []byte` field to `Config` (alongside `PrivateKeyPath`). One or the other is populated depending on the source:
+
+```go
+type Config struct {
+    APIKeyID       string
+    PrivateKeyPath string // set by Load() for --local/env-var mode
+    PrivateKeyData []byte // set by LoadFromStore() for DB mode
+    Environment    string
+    BaseURL        string
+}
+
+func LoadFromStore(store database.Store) (*Config, error) {
+    keyID, _ := store.GetSetting("kalshi_api_key_id")
+    if keyID == "" {
+        return nil, fmt.Errorf("Kalshi API key not configured (set in Settings)")
+    }
+
+    privateKey, _ := store.GetSetting("kalshi_private_key")
+    if privateKey == "" {
+        return nil, fmt.Errorf("Kalshi private key not configured (set in Settings)")
+    }
+
+    env, _ := store.GetSetting("kalshi_environment")
+    if env == "" {
+        env = "prod"
+    }
+
+    var baseURL string
+    switch env {
+    case "prod":
+        baseURL = ProdBaseURL
+    case "demo":
+        baseURL = DemoBaseURL
+    default:
+        return nil, fmt.Errorf("invalid kalshi_environment: %s", env)
+    }
+
+    return &Config{
+        APIKeyID:       keyID,
+        PrivateKeyData: []byte(privateKey),
+        Environment:    env,
+        BaseURL:        baseURL,
+    }, nil
+}
+```
+
+Keep `Load()` unchanged for env-var/`--local` mode.
+
+**Update: `internal/kalshi/auth/signer.go`**
+
+Add `NewSignerFromBytes` that takes raw PEM bytes instead of a file path. Extract the PEM parsing logic into a shared helper:
+
+```go
+// NewSignerFromBytes creates a Signer from PEM-encoded RSA private key bytes.
+// Used when the key is stored in the database rather than on disk.
+func NewSignerFromBytes(keyID string, pemData []byte) (*Signer, error) {
+    privateKey, err := parsePEMKey(pemData)
+    if err != nil {
+        return nil, err
+    }
+    return &Signer{keyID: keyID, privateKey: privateKey}, nil
+}
+
+// parsePEMKey extracts an RSA private key from PEM data (PKCS#8 or PKCS#1).
+func parsePEMKey(pemData []byte) (*rsa.PrivateKey, error) {
+    block, _ := pem.Decode(pemData)
+    if block == nil {
+        return nil, fmt.Errorf("failed to decode PEM block")
+    }
+    // Try PKCS#8 first, fall back to PKCS#1 (same logic as current NewSigner)
+    ...
+}
+```
+
+Refactor existing `NewSigner` to call `parsePEMKey` after reading the file.
+
+**Update: `internal/kalshi/client/client.go`**
+
+The current `client.New(cfg)` calls `auth.NewSigner(cfg.APIKeyID, cfg.PrivateKeyPath)`. Update to choose the constructor based on which field is populated:
+
+```go
+func New(cfg *config.Config) (*Client, error) {
+    var signer *auth.Signer
+    var err error
+    if len(cfg.PrivateKeyData) > 0 {
+        signer, err = auth.NewSignerFromBytes(cfg.APIKeyID, cfg.PrivateKeyData)
+    } else {
+        signer, err = auth.NewSigner(cfg.APIKeyID, cfg.PrivateKeyPath)
+    }
+    if err != nil {
+        return nil, fmt.Errorf("failed to create signer: %w", err)
+    }
+    // ... rest unchanged
+}
+```
+
+This means `client.New` handles both modes — no need for a separate `NewFromConfig`.
 
 ### Step 6: Absorb kalshi-serve into the Infovore server
 
@@ -519,23 +661,124 @@ r.Get("/markets", km.HandleMarketsPage)
 
 ### Step 7: Refactor scanner CLI into a library function
 
-**File: `internal/kalshi/scanner/run.go`** (new)
+**Current state of `GenerateHTMLReport`**: The function in `report.go` takes an `outputPath string` and writes directly to disk via `os.Create(outputPath)`. It has 11 parameters:
 
 ```go
+func GenerateHTMLReport(
+    markets []FilteredMarket,
+    totalSeries int,
+    minPrice, maxPrice float64,
+    outputPath string,            // ← writes to file on disk
+    balance *models.GetBalanceResponse,
+    enrichedPositions []EnrichedPosition,
+    settlements []models.Settlement,
+    fills []models.Fill,
+    marketTitles map[string]string,
+    categoryViews []CategoryView,
+) error
+```
+
+**Required change**: Add a companion function that returns HTML as a string instead of writing to disk:
+
+```go
+// GenerateHTMLReportString returns the report HTML as a string (for DB storage).
+func GenerateHTMLReportString(
+    markets []FilteredMarket,
+    totalSeries int,
+    minPrice, maxPrice float64,
+    balance *models.GetBalanceResponse,
+    enrichedPositions []EnrichedPosition,
+    settlements []models.Settlement,
+    fills []models.Fill,
+    marketTitles map[string]string,
+    categoryViews []CategoryView,
+) (string, error) {
+    // Same template execution as GenerateHTMLReport but renders to bytes.Buffer
+    // Refactor: extract shared template logic into an internal helper
+}
+```
+
+Keep the original `GenerateHTMLReport` for `--local` mode file output.
+
+**File: `internal/kalshi/scanner/run.go`** (new)
+
+This extracts the full scan orchestration from `cmd/kalshi/main.go` lines 84-287 into a reusable library function.
+
+**Critical design constraint**: The scanner packages currently have zero dependency on the database layer — `scanner` only imports `models` + stdlib, `client` imports `auth` + `config` + `models`. This clean separation must be preserved. `run.go` does NOT import `database.Store`. Instead, it accepts pre-loaded config values and returns results; the caller (KalshiManager) handles all DB reads/writes.
+
+```go
+// ScanConfig holds everything needed to run a scan.
+// All values are pre-extracted from the database by the caller.
 type ScanConfig struct {
+    // Kalshi credentials (extracted from DB settings by caller)
+    APIKeyID       string
+    PrivateKeyData []byte   // PEM content from settings table
+    Environment    string   // "prod" or "demo"
+
+    // Scan parameters
     Categories []string
-    LogWriter  io.Writer
-    Store      database.Store  // for saving report to DB
+    MinPrice   float64      // default 0.75
+    MaxPrice   float64      // default 0.90
+
+    // Output
+    LogWriter  io.Writer    // for streaming progress (each fmt.Printf becomes fmt.Fprintf)
 }
 
-func RunScan(cfg ScanConfig) error {
-    // Load credentials from DB via config.LoadFromStore()
-    // Create API client
-    // Scan categories, filter markets, calculate Kelly
-    // Generate report HTML
-    // Save to kalshi_reports table via cfg.Store.SaveKalshiReport()
-    // Stream progress to cfg.LogWriter
+// ScanResult contains the outputs of a scan. The caller stores these in the DB.
+type ScanResult struct {
+    HTML string              // Complete HTML report
+    Log  string              // Full scan log output
 }
+
+func RunScan(cfg ScanConfig) (*ScanResult, error) {
+    // 1. Build config.Config from ScanConfig fields
+    //    kalshiCfg := &config.Config{
+    //        APIKeyID: cfg.APIKeyID, PrivateKeyData: cfg.PrivateKeyData,
+    //        Environment: cfg.Environment, BaseURL: baseURLForEnv(cfg.Environment),
+    //    }
+    // 2. Create API client: client.New(kalshiCfg)
+    // 3. Fetch allCategories via apiClient.GetCategories()
+    // 4. Fetch portfolio: apiClient.GetBalance(), GetPositions(), enrich with GetMarket()
+    // 5. For each category: GetSeriesList() → GetMarkets() → build []CategoryMarkets
+    // 6. FilterByPriceRangeMulti(), SortByAskPrice()
+    // 7. Fetch settlements + fills for current year
+    // 8. Build CategoryViews
+    // 9. html, err := GenerateHTMLReportString(...)
+    // 10. Return &ScanResult{HTML: html, Log: logBuf.String()}, nil
+    //
+    // All fmt.Printf calls from main.go become fmt.Fprintf(cfg.LogWriter, ...)
+    // Use a tee writer (io.MultiWriter) to also capture log into logBuf for the result.
+}
+```
+
+**The caller (KalshiManager in `server/kalshi.go`) handles DB interaction:**
+```go
+func (km *KalshiManager) runScan() {
+    // 1. Read settings from DB
+    keyID, _ := km.store.GetSetting("kalshi_api_key_id")
+    privateKey, _ := km.store.GetSetting("kalshi_private_key")
+    env, _ := km.store.GetSetting("kalshi_environment")
+    categories := parseCategories(km.store.GetSetting("kalshi_categories"))
+
+    // 2. Call scanner (DB-agnostic)
+    result, err := scanner.RunScan(scanner.ScanConfig{
+        APIKeyID: keyID, PrivateKeyData: []byte(privateKey),
+        Environment: env, Categories: categories,
+        MinPrice: 0.75, MaxPrice: 0.90, LogWriter: &km.liveBuf,
+    })
+
+    // 3. Store results in DB
+    if err == nil {
+        km.store.SaveKalshiReport(result.HTML)
+    }
+    km.store.AddKalshiScanLog(result.Log, errString(err))
+}
+```
+
+This preserves the scanner's clean dependency graph:
+```
+scanner → models + stdlib (no database import)
+client  → auth + config + models + stdlib (no database import)
 ```
 
 ### Step 8: Build the unified Settings page
@@ -554,32 +797,78 @@ Handles:
 - Private key textarea (write-only — shows placeholder if configured, never shows actual key)
 
 **Update: `internal/server/server.go`**
-- Rewrite `handleGetSettings` and `handleSaveSettings` to handle all settings keys
-- Add `handleTestKalshi` endpoint
-- Add `GET /settings` route to serve the settings page
-- Remove `handleGetDatabaseSettings` / `handleSaveDatabaseSettings` (absorbed into unified settings)
+
+The existing Infovore server has these settings-related routes and handlers:
+- `GET /api/settings` → `handleGetSettings` — returns `{polling_interval_minutes: N}`
+- `POST /api/settings` → `handleSaveSettings` — saves polling interval to DB
+- `GET /api/database-settings` → `handleGetDatabaseSettings` — returns DB type + masked URL
+- `POST /api/database-settings` → `handleSaveDatabaseSettings` — writes DB_URL to `.env` file
+
+Changes:
+- Rewrite `handleGetSettings` to return ALL settings (polling, Kalshi, theme, DB) as one JSON object
+- Rewrite `handleSaveSettings` to accept partial updates for any settings key
+- Add `handleTestKalshi` endpoint (`POST /api/settings/test-kalshi`)
+- Add `GET /settings` route to serve the settings page template
+- **Delete** `handleGetDatabaseSettings` and `handleSaveDatabaseSettings` — their functionality is absorbed into the unified settings handlers
+- **Delete** routes `GET/POST /api/database-settings` from the chi router
 
 **Update: Kalshi report hamburger menu** in `report.go`
 - Remove the inline category settings dialog
 - "Settings" menu item now navigates to `/settings` (the full settings page)
 - Keep "Refresh" as a direct action (POST `/api/kalshi/refresh`)
 
+**Update: Infovore reader routes** in `server.go`
+- Move `r.Get("/", s.handleHome)` → `r.Get("/reader", s.handleHome)`
+- Move `r.Get("/feed/{feedID}", ...)` → `r.Get("/reader/feed/{feedID}", ...)`
+- Move `r.Get("/folder/{folderID}", ...)` → `r.Get("/reader/folder/{folderID}", ...)`
+- All `/api/*` routes stay unchanged (they're called by the reader's JS regardless of iframe context)
+- Add `r.Get("/", s.handleShell)` to serve `shell.html`
+
 **Update: Infovore reader** in `layout.html` / `app.js`
 - Remove the gear icon settings modal
 - Add hamburger menu (matching Kalshi's) with "Settings" linking to `/settings`
+- Update all internal links from `/feed/` to `/reader/feed/`, `/folder/` to `/reader/folder/` (in `layout.html` and `app.js`)
 
 ### Step 9: Add the tabbed shell page
 
 **File: `internal/server/templates/shell.html`** (new)
 
-Tab bar with Reader and Markets tabs, plus the dark mode toggle in the upper right. Uses iframe for content isolation.
+Tab bar with Reader and Markets tabs, plus the dark mode toggle (crescent moon / sun icon) in the upper right. Uses iframe for content isolation so each app's CSS/JS doesn't conflict.
+
+**How the tabs work:**
+- `GET /` serves `shell.html` — a minimal page with a tab bar and a single `<iframe>` element
+- Tab bar has two buttons: "Reader" and "Markets", plus a hamburger menu (☰) and theme toggle (🌙/☀)
+- Clicking "Reader" sets `iframe.src = "/reader"` — the full Infovore reader page (renders complete HTML via `layout.html`)
+- Clicking "Markets" sets `iframe.src = "/markets"` — either the latest Kalshi report from DB or a placeholder/scanning page
+- Default tab on load: "Reader"
+- Active tab is tracked in URL hash (`/#reader`, `/#markets`) and `localStorage` for persistence across reloads
+- In-iframe navigation (e.g., clicking a feed in the reader) stays within the iframe naturally
+
+**Hamburger menu dropdown** (appears on click):
+- "Settings" → navigates the parent page to `/settings` (full page, not in iframe)
+- "Refresh Scan" → `POST /api/kalshi/refresh`, shows toast notification
+
+**Route: `GET /markets`** — the KalshiManager handler:
+```go
+func (km *KalshiManager) HandleMarketsPage(w http.ResponseWriter, r *http.Request) {
+    html, ts, err := km.store.GetLatestKalshiReport()
+    if err != nil || html == "" {
+        // Serve placeholder page (scan status + "Run Scan" button)
+        // Similar to current cmd/serve placeholderPage but using theme tokens
+        return
+    }
+    w.Header().Set("Content-Type", "text/html")
+    w.Write([]byte(html))
+}
+```
 
 **Theme propagation:**
-- Parent posts `{type: 'theme', value: 'dark'}` to iframe on toggle
-- Each iframe page listens and sets `data-theme`
+- Parent shell sets `document.documentElement.dataset.theme` and saves to `localStorage`
+- Parent posts `{type: 'theme-changed', value: 'dark'}` to `iframe.contentWindow`
+- Each iframe page has a `window.addEventListener('message', ...)` that sets its own `data-theme`
+- On iframe load, iframe reads `localStorage('theme')` to set initial theme (handles the case where iframe loads before parent posts)
 - `localStorage` provides instant load; DB `settings.theme` provides cross-device persistence
-
-**Route: `GET /`** → serves `shell.html`, defaults to Reader tab.
+- Theme toggle also does `POST /api/settings` with `{"theme": "dark"}` to persist to DB (fire-and-forget, non-blocking)
 
 ### Step 10: Background scanner goroutine
 
@@ -705,9 +994,11 @@ Write documentation covering:
 - [ ] Add Kalshi settings key defaults to migration
 - [ ] Implement new Store interface methods for Kalshi data
 - [ ] Refactor `internal/kalshi/config/config.go` to read from DB Store
-- [ ] Add `NewSignerFromBytes()` to `internal/kalshi/auth/`
-- [ ] Create `internal/kalshi/scanner/run.go` — extract scan orchestration as library function
-- [ ] Update `run.go` to save reports to DB instead of flat files
+- [ ] Add `NewSignerFromBytes()` to `internal/kalshi/auth/signer.go`, refactor `NewSigner` to share `parsePEMKey` helper
+- [ ] Update `internal/kalshi/client/client.go` `New()` to handle both `PrivateKeyPath` and `PrivateKeyData`
+- [ ] Add `GenerateHTMLReportString()` to `internal/kalshi/scanner/report.go` (returns HTML string instead of writing to disk)
+- [ ] Create `internal/kalshi/scanner/run.go` — extract scan orchestration from `cmd/kalshi/main.go`; accepts plain config values, returns `*ScanResult` (HTML + log); does NOT import database
+- [ ] `KalshiManager.runScan()` in `kalshi.go` reads settings from DB → calls `scanner.RunScan()` → stores result in DB
 - [ ] Create `internal/server/kalshi.go` — KalshiManager with routes, scan state, scheduler
 - [ ] Build unified Settings API (`GET/POST /api/settings`, `POST /api/settings/test-kalshi`)
 - [ ] Remove old settings/database-settings endpoints
@@ -719,7 +1010,7 @@ Write documentation covering:
 - [ ] Refactor `style.css` to use theme tokens (remove hardcoded colors)
 - [ ] Refactor `report.go` CSS to use theme tokens (remove hardcoded colors)
 - [ ] Add theme.css `<link>` to Kalshi report template `<head>`
-- [ ] Add inline theme.css fallback for `--local` mode reports
+- [ ] (Optional, low priority) Add inline theme.css fallback in `GenerateHTMLReport` for standalone file output
 - [ ] Create `shell.html` template with tab bar, theme toggle, iframe
 - [ ] Create `settings.html` template (full settings page)
 - [ ] Create `settings.js` (settings page logic)
@@ -728,6 +1019,7 @@ Write documentation covering:
 - [ ] Add iframe theme propagation (postMessage)
 - [ ] Remove Kalshi hamburger menu settings dialog (replace with link to /settings)
 - [ ] Remove Infovore gear icon settings modal (replace with hamburger menu link)
+- [ ] Update Infovore internal links: `/feed/` → `/reader/feed/`, `/folder/` → `/reader/folder/` (in `layout.html` and `app.js`)
 - [ ] Update Kalshi report API paths to `/api/kalshi/*`
 - [ ] Update Kalshi placeholder page API paths
 
@@ -737,22 +1029,24 @@ Write documentation covering:
 - [ ] Update `.dockerignore`
 - [ ] Create `docs/db.md` with Proxmox VM + PostgreSQL setup guide
 
-### Testing
-- [ ] `go build ./... && go vet ./... && go test ./...`
-- [ ] RSS reader works at `/reader` in light mode
-- [ ] RSS reader works at `/reader` in dark mode
-- [ ] Kalshi report works at `/markets` in light mode
-- [ ] Kalshi report works at `/markets` in dark mode
-- [ ] Settings page loads and saves all fields
-- [ ] Kalshi credentials test button works
-- [ ] Theme toggle persists across tab switches and page reloads
-- [ ] Tab switching works
-- [ ] First-run setup page works (no DB_URL → setup → connect)
-- [ ] Docker build and run with PostgreSQL
-- [ ] `--local` flag still works for Kalshi (with inline theme CSS, env var credentials)
-- [ ] Background scan scheduler runs at configured interval
-- [ ] Scan reports saved to and served from PostgreSQL
-- [ ] Scan logs saved to and queryable from PostgreSQL
+### Automated Tests (Phase 1)
+- [ ] Verify carried-over tests pass: `signer_test.go` (15 tests), `kelly_test.go` (10 tests)
+- [ ] Write `NewSignerFromBytes` + `parsePEMKey` tests in `signer_test.go` (~6 tests)
+- [ ] Write `LoadFromStore` tests in `config_test.go` with mock Store (~7 tests)
+- [ ] Write `GenerateHTMLReportString` tests in `report_test.go` (~3 tests)
+- [ ] Write `RunScan` config validation tests in `run_test.go` (~3 tests)
+- [ ] Write Postgres store method tests in `postgres_test.go` (~5 tests, skipped without `TEST_DB_URL`)
+- [ ] Write KalshiManager HTTP handler tests in `kalshi_test.go` (~4 tests)
+- [ ] `go build ./... && go vet ./... && go test ./...` passes
+
+### Automated Tests (Phase 2)
+- [ ] Write settings API + route tests in `server_test.go` (~7 tests)
+- [ ] (Optional) Write CSS token orphan detection test in `report_test.go`
+- [ ] `go build ./... && go vet ./... && go test ./...` passes (all Phase 1 + Phase 2)
+
+### Manual Verification
+
+See the **Testing Plan** section below for the full breakdown of manual checklists per phase.
 
 ---
 
@@ -765,7 +1059,7 @@ Write documentation covering:
 | `internal/database/sqlite.go` | DELETED |
 | `internal/database/store.go` | Add Kalshi store methods to interface |
 | `internal/database/postgres.go` | Add Kalshi tables, settings defaults, new methods |
-| `internal/server/server.go` | Move `/` to `/reader`, add shell/settings/Kalshi routes, rewrite settings handlers |
+| `internal/server/server.go` | Move `GET /` → `GET /reader`, `GET /feed/{id}` → `GET /reader/feed/{id}`, `GET /folder/{id}` → `GET /reader/folder/{id}`; add `GET /` (shell.html), `GET /settings`, `GET /markets`, `/api/kalshi/*` routes; rewrite settings handlers; delete database-settings handlers |
 | `internal/server/kalshi.go` | NEW — KalshiManager, route handlers, scan state, scheduler |
 | `internal/server/templates/shell.html` | NEW — tabbed shell with theme toggle |
 | `internal/server/templates/settings.html` | NEW — unified settings page |
@@ -776,19 +1070,38 @@ Write documentation covering:
 | `internal/server/static/js/settings.js` | NEW — settings page logic |
 | `internal/kalshi/` | NEW — entire directory copied from kalshi_API |
 | `internal/kalshi/config/config.go` | Add `LoadFromStore()`, keep `Load()` for local mode |
-| `internal/kalshi/auth/` | Add `NewSignerFromBytes()` |
-| `internal/kalshi/scanner/run.go` | NEW — scan orchestration, writes to DB |
+| `internal/kalshi/config/config_test.go` | NEW — `LoadFromStore` tests with mock Store |
+| `internal/kalshi/auth/signer.go` | Add `NewSignerFromBytes()`, extract `parsePEMKey()` |
+| `internal/kalshi/auth/signer_test.go` | Add `NewSignerFromBytes` + `parsePEMKey` tests |
+| `internal/kalshi/scanner/run.go` | NEW — scan orchestration (DB-agnostic, accepts config values, returns HTML+log) |
+| `internal/kalshi/scanner/run_test.go` | NEW — config validation tests |
 | `internal/kalshi/scanner/report.go` | Replace hardcoded colors with tokens, update API paths, remove inline settings dialog |
+| `internal/kalshi/scanner/report_test.go` | NEW — `GenerateHTMLReportString` output validation |
+| `internal/database/postgres_test.go` | NEW — Store method tests (requires `TEST_DB_URL`) |
+| `internal/server/kalshi_test.go` | NEW — KalshiManager HTTP handler tests |
+| `internal/server/server_test.go` | NEW — Settings API, shell/reader/settings route tests |
 | `Dockerfile` | Simplify: single binary, no cron/entrypoint/SQLite |
 | `docs/db.md` | NEW — Proxmox VM sizing + PostgreSQL setup guide |
 
 ## Files to NOT Copy
 
-- `kalshi_API/cmd/kalshi/main.go` — logic extracted into `scanner/run.go`
+- `kalshi_API/cmd/kalshi/main.go` — scan orchestration extracted into `scanner/run.go`; CLI flags not migrated (see note on `--local` mode below)
 - `kalshi_API/cmd/serve/main.go` — logic absorbed into `server/kalshi.go`
 - `kalshi_API/docker-entrypoint.sh` — no longer needed
 - `kalshi_API/Dockerfile` — replaced by unified Dockerfile
 - `kalshi_API/.devcontainer/` — use Infovore's devcontainer
+
+## Note on `--local` Mode
+
+The Kalshi scanner currently has a `--local` flag that writes a timestamped HTML report to a Windows desktop path and reads credentials from environment variables. This mode is useful for running the scanner as a standalone CLI without Docker or a database.
+
+**In the merged binary**, `--local` mode is **not preserved as a flag**. The merged app is a webapp that reads credentials from PostgreSQL. If standalone CLI scanning is ever needed again, the user can:
+1. Keep the original `kalshi_API` repo's binary for local use, or
+2. Add a `scan` subcommand to the merged binary later (low priority, out of scope for this plan)
+
+The `config.Load()` env-var-based function and `auth.NewSigner()` file-path-based constructor are kept in the codebase (not deleted) to minimize code churn and preserve the option, but no CLI entrypoint calls them in the merged binary.
+
+For `--local` report generation (if re-added later): `GenerateHTMLReport(outputPath)` still writes to disk and embeds theme CSS inline as a `<style>` block (since there's no server to serve `theme.css`).
 
 ---
 
@@ -813,10 +1126,512 @@ Write documentation covering:
 
 ## Estimated Scope
 
-- ~22 files touched/created
+- ~30 files touched/created (including 8 test files)
 - ~500 lines of new code (KalshiManager, settings page, theme system, DB methods, shell)
+- ~400 lines of new tests (~35 new tests across 8 test files, plus ~25 carried over)
 - ~150 lines of find-and-replace (hardcoded colors → token references)
 - ~100 lines of deletions (SQLite code, old settings modals)
 - ~50 lines of API path updates
 - ~200 lines of documentation (docs/db.md)
 - The Kalshi scanner logic and the Infovore reader logic are completely independent — they share only the HTTP server, the PostgreSQL database, and the design tokens
+
+---
+
+## Testing Plan
+
+### Existing Tests (Carried Over from Kalshi)
+
+These test files are copied into `internal/kalshi/` and must pass after import path updates:
+
+| File | Tests | What it covers |
+|------|-------|----------------|
+| `internal/kalshi/auth/signer_test.go` | 15 | RSA key parsing (PKCS#1 + PKCS#8), PEM decode, file-not-found, invalid PEM, signing, signature verification, timestamp message format. Has `generateTestKey(t, pkcs8 bool)` helper. |
+| `internal/kalshi/scanner/kelly_test.go` | 10 | FavoriteLongshotEdge (extreme/longshot/crossover/favorites), KalshiFee, CalculateKelly (positive/zero/negative edge), GenerateRecommendations, lerp. Pure math — no external deps. |
+
+Note: `internal/kalshi/config/config_test.go` from the source repo (8 tests for env-var-based `Load()`) is NOT copied because `config.go` is modified to add `LoadFromStore()`. However, the existing `Load()` function is preserved, so these tests can optionally be carried over if `Load()` needs to remain tested.
+
+**Infovore has zero existing test files.** All tests below are new.
+
+### Phase 1 Automated Tests
+
+These tests should be written during Phase 1 and must pass at the Phase 1 verification gate (`go test ./...`).
+
+#### 1. `internal/kalshi/auth/signer_test.go` — Add `NewSignerFromBytes` tests
+
+Reuse the existing `generateTestKey(t, pkcs8 bool)` helper. Instead of writing PEM to a temp file and calling `NewSigner(keyID, path)`, generate PEM bytes in memory and call `NewSignerFromBytes(keyID, pemBytes)`.
+
+```go
+// Tests to add (alongside existing tests):
+func TestNewSignerFromBytes_PKCS1(t *testing.T)          // generate PKCS#1 PEM → NewSignerFromBytes → sign + verify
+func TestNewSignerFromBytes_PKCS8(t *testing.T)          // generate PKCS#8 PEM → NewSignerFromBytes → sign + verify
+func TestNewSignerFromBytes_InvalidPEM(t *testing.T)     // garbage bytes → expect error
+func TestNewSignerFromBytes_EmptyPEM(t *testing.T)       // nil/empty → expect error
+func TestNewSignerFromBytes_ECKey(t *testing.T)          // EC PEM → expect "not an RSA key" error
+func TestParsePEMKey_SharedLogic(t *testing.T)           // verify parsePEMKey works identically for both constructors
+```
+
+Pattern: generate a test key, encode to PEM bytes, call `NewSignerFromBytes`, sign a test message, verify with the public key. Same assertions as existing `TestNewSigner_*` tests but without the filesystem.
+
+#### 2. `internal/kalshi/config/config_test.go` — New tests for `LoadFromStore`
+
+This file needs new tests for the DB-backed config loader. Use a mock Store interface.
+
+```go
+// mockStore implements database.Store for testing
+type mockStore struct {
+    settings map[string]string
+}
+func (m *mockStore) GetSetting(key string) (string, error) {
+    return m.settings[key], nil
+}
+// ... other Store methods return zero values
+
+func TestLoadFromStore_Success(t *testing.T)              // all settings present → valid Config with PrivateKeyData
+func TestLoadFromStore_MissingAPIKey(t *testing.T)        // no kalshi_api_key_id → error
+func TestLoadFromStore_MissingPrivateKey(t *testing.T)    // no kalshi_private_key → error
+func TestLoadFromStore_DefaultEnvProd(t *testing.T)       // no kalshi_environment → defaults to "prod"
+func TestLoadFromStore_DemoEnv(t *testing.T)              // kalshi_environment=demo → DemoBaseURL
+func TestLoadFromStore_InvalidEnv(t *testing.T)           // kalshi_environment=invalid → error
+func TestLoadFromStore_PrivateKeyDataPopulated(t *testing.T) // verify PrivateKeyData is []byte of the PEM string
+```
+
+Note: `LoadFromStore` imports `database.Store`, so this test file needs to import the database package. This is fine — the config package gains a database dependency for `LoadFromStore()` only. The scanner and client packages remain database-free.
+
+#### 3. `internal/kalshi/scanner/report_test.go` — New test for `GenerateHTMLReportString`
+
+```go
+func TestGenerateHTMLReportString_BasicOutput(t *testing.T) {
+    // Construct minimal synthetic data:
+    markets := []FilteredMarket{{
+        Market:   models.Market{Ticker: "TEST-MARKET", Title: "Test Market", /* ... */},
+        Side:     Yes,
+        AskPrice: 0.80,
+        Category: "Politics",
+    }}
+    categoryViews := []CategoryView{{Name: "Politics", Active: true}}
+
+    html, err := GenerateHTMLReportString(
+        markets, 1, 0.75, 0.90,
+        &models.GetBalanceResponse{Balance: 1000},
+        nil, nil, nil, nil, categoryViews,
+    )
+
+    if err != nil { t.Fatalf("unexpected error: %v", err) }
+    if html == "" { t.Fatal("expected non-empty HTML") }
+    // Verify key structural elements
+    if !strings.Contains(html, "<html") { t.Error("missing <html> tag") }
+    if !strings.Contains(html, "TEST-MARKET") { t.Error("market ticker not in output") }
+    if !strings.Contains(html, "Politics") { t.Error("category not in output") }
+}
+
+func TestGenerateHTMLReportString_EmptyMarkets(t *testing.T) {
+    // Zero markets should still produce valid HTML (with "no markets" message or empty table)
+    html, err := GenerateHTMLReportString(nil, 0, 0.75, 0.90, nil, nil, nil, nil, nil, nil)
+    if err != nil { t.Fatalf("unexpected error: %v", err) }
+    if !strings.Contains(html, "<html") { t.Error("missing <html> tag") }
+}
+
+func TestGenerateHTMLReportString_MatchesDiskOutput(t *testing.T) {
+    // Generate via both paths with same data, compare HTML output
+    // This validates that GenerateHTMLReportString produces identical output to GenerateHTMLReport
+    tmpDir := t.TempDir()
+    outputPath := filepath.Join(tmpDir, "test_report.html")
+    // ... call GenerateHTMLReport(outputPath, ...) and GenerateHTMLReportString(...)
+    // ... read file, compare strings
+}
+```
+
+#### 4. `internal/kalshi/scanner/run_test.go` — RunScan config validation
+
+```go
+func TestRunScan_MissingAPIKey(t *testing.T) {
+    _, err := RunScan(ScanConfig{PrivateKeyData: []byte("x"), Environment: "prod"})
+    if err == nil { t.Fatal("expected error for missing API key") }
+}
+
+func TestRunScan_MissingPrivateKey(t *testing.T) {
+    _, err := RunScan(ScanConfig{APIKeyID: "test", Environment: "prod"})
+    if err == nil { t.Fatal("expected error for missing private key") }
+}
+
+func TestRunScan_InvalidEnvironment(t *testing.T) {
+    _, err := RunScan(ScanConfig{APIKeyID: "test", PrivateKeyData: []byte("x"), Environment: "invalid"})
+    if err == nil { t.Fatal("expected error for invalid environment") }
+}
+```
+
+Note: Testing a full scan requires live Kalshi API credentials. These tests only validate the early config-validation path. Full integration testing is manual (see below).
+
+#### 5. `internal/database/postgres_test.go` — Store method tests
+
+These tests require a PostgreSQL connection. Use the `DB_URL` env var (or skip if not set).
+
+```go
+func setupTestDB(t *testing.T) *PostgresStore {
+    dbURL := os.Getenv("TEST_DB_URL")
+    if dbURL == "" {
+        t.Skip("TEST_DB_URL not set, skipping Postgres tests")
+    }
+    store, err := NewPostgres(dbURL)
+    if err != nil { t.Fatalf("failed to connect: %v", err) }
+    t.Cleanup(func() {
+        // Clean up test data
+        store.db.Exec("DELETE FROM kalshi_reports")
+        store.db.Exec("DELETE FROM kalshi_scan_log")
+        store.Close()
+    })
+    return store
+}
+
+func TestSaveAndGetKalshiReport(t *testing.T) {
+    store := setupTestDB(t)
+    // Save a report
+    err := store.SaveKalshiReport("<html>test report</html>")
+    if err != nil { t.Fatalf("SaveKalshiReport: %v", err) }
+    // Retrieve it
+    html, ts, err := store.GetLatestKalshiReport()
+    if err != nil { t.Fatalf("GetLatestKalshiReport: %v", err) }
+    if html != "<html>test report</html>" { t.Errorf("got %q", html) }
+    if ts.IsZero() { t.Error("expected non-zero timestamp") }
+}
+
+func TestSaveKalshiReport_ReplacesOld(t *testing.T) {
+    store := setupTestDB(t)
+    store.SaveKalshiReport("report 1")
+    store.SaveKalshiReport("report 2")
+    html, _, _ := store.GetLatestKalshiReport()
+    if html != "report 2" { t.Errorf("expected latest report, got %q", html) }
+    // Verify only one row exists
+    var count int
+    store.db.QueryRow("SELECT COUNT(*) FROM kalshi_reports").Scan(&count)
+    if count != 1 { t.Errorf("expected 1 row, got %d", count) }
+}
+
+func TestGetLatestKalshiReport_Empty(t *testing.T) {
+    store := setupTestDB(t)
+    html, _, err := store.GetLatestKalshiReport()
+    if err != nil { t.Fatalf("unexpected error: %v", err) }
+    if html != "" { t.Errorf("expected empty, got %q", html) }
+}
+
+func TestAddAndGetKalshiScanLog(t *testing.T) {
+    store := setupTestDB(t)
+    store.AddKalshiScanLog("scan output 1", "")
+    store.AddKalshiScanLog("scan output 2", "some error")
+    logs, err := store.GetKalshiScanLog(10)
+    if err != nil { t.Fatalf("GetKalshiScanLog: %v", err) }
+    if len(logs) != 2 { t.Fatalf("expected 2 logs, got %d", len(logs)) }
+    // Most recent first
+    if logs[0].Output != "scan output 2" { t.Error("wrong order") }
+    if logs[0].Error != "some error" { t.Error("error not stored") }
+}
+
+func TestAddKalshiScanLog_PurgesOldEntries(t *testing.T) {
+    store := setupTestDB(t)
+    for i := 0; i < 55; i++ {
+        store.AddKalshiScanLog(fmt.Sprintf("log %d", i), "")
+    }
+    logs, _ := store.GetKalshiScanLog(100)
+    if len(logs) > 50 { t.Errorf("expected <=50 after purge, got %d", len(logs)) }
+}
+```
+
+#### 6. `internal/server/kalshi_test.go` — HTTP handler tests
+
+Use `net/http/httptest` to test KalshiManager handlers without a running server.
+
+```go
+func TestHandleMarketsPage_NoReport(t *testing.T) {
+    store := newMockStore()  // mock with no reports
+    km := NewKalshiManager(store, nil)
+    req := httptest.NewRequest("GET", "/markets", nil)
+    w := httptest.NewRecorder()
+    km.HandleMarketsPage(w, req)
+    // Should return placeholder page
+    if w.Code != 200 { t.Errorf("status %d", w.Code) }
+    if !strings.Contains(w.Body.String(), "No report") { t.Error("expected placeholder") }
+}
+
+func TestHandleMarketsPage_WithReport(t *testing.T) {
+    store := newMockStore()
+    store.reports = "<html>test</html>"
+    km := NewKalshiManager(store, nil)
+    req := httptest.NewRequest("GET", "/markets", nil)
+    w := httptest.NewRecorder()
+    km.HandleMarketsPage(w, req)
+    if w.Code != 200 { t.Errorf("status %d", w.Code) }
+    if w.Body.String() != "<html>test</html>" { t.Error("report not served") }
+}
+
+func TestHandleStatus_Idle(t *testing.T) {
+    km := NewKalshiManager(newMockStore(), nil)
+    req := httptest.NewRequest("GET", "/api/kalshi/status", nil)
+    w := httptest.NewRecorder()
+    km.HandleStatus(w, req)
+    var status map[string]interface{}
+    json.NewDecoder(w.Body).Decode(&status)
+    if status["scanning"].(bool) { t.Error("should not be scanning") }
+}
+
+func TestHandleRefresh_MethodNotAllowed(t *testing.T) {
+    km := NewKalshiManager(newMockStore(), nil)
+    req := httptest.NewRequest("GET", "/api/kalshi/refresh", nil)
+    w := httptest.NewRecorder()
+    km.HandleRefresh(w, req)
+    if w.Code != 405 { t.Errorf("expected 405, got %d", w.Code) }
+}
+```
+
+### Phase 1 Verification Gate
+
+All of the following must pass:
+
+```bash
+go build ./...    # compiles cleanly
+go vet ./...      # no issues
+go test ./...     # all automated tests pass
+```
+
+Then manual testing with a running PostgreSQL:
+- [ ] `GET /` → existing Infovore reader works unchanged
+- [ ] `GET /markets` → placeholder page (no report yet)
+- [ ] Configure Kalshi credentials directly in DB settings table
+- [ ] `POST /api/kalshi/refresh` → triggers scan
+- [ ] `GET /api/kalshi/status` → shows scan progress / completion
+- [ ] `GET /api/kalshi/log` → shows log entries from DB
+- [ ] After scan completes: `GET /markets` → serves the generated report HTML
+- [ ] Background scheduler goroutine triggers on configured interval (verify via log)
+- [ ] Docker build succeeds: `docker build -t infovore .`
+- [ ] Docker run works: `docker run -e DB_URL=... infovore`
+
+### Phase 2 Automated Tests
+
+#### 7. `internal/server/server_test.go` — Settings API + route tests
+
+```go
+func TestGetSettings_ReturnsAllKeys(t *testing.T) {
+    // GET /api/settings should return polling_interval, kalshi_categories,
+    // kalshi_api_key_id, kalshi_environment, kalshi_private_key_configured (bool), theme
+    s := setupTestServer(t)
+    req := httptest.NewRequest("GET", "/api/settings", nil)
+    w := httptest.NewRecorder()
+    s.router.ServeHTTP(w, req)
+    var settings map[string]interface{}
+    json.NewDecoder(w.Body).Decode(&settings)
+    // kalshi_private_key should NOT be in the response
+    if _, ok := settings["kalshi_private_key"]; ok {
+        t.Error("private key should never be returned in GET")
+    }
+    // kalshi_private_key_configured should be a boolean
+    if _, ok := settings["kalshi_private_key_configured"]; !ok {
+        t.Error("missing kalshi_private_key_configured field")
+    }
+}
+
+func TestPostSettings_PartialUpdate(t *testing.T) {
+    s := setupTestServer(t)
+    body := strings.NewReader(`{"kalshi_categories": ["Politics", "Sports"]}`)
+    req := httptest.NewRequest("POST", "/api/settings", body)
+    req.Header.Set("Content-Type", "application/json")
+    w := httptest.NewRecorder()
+    s.router.ServeHTTP(w, req)
+    if w.Code != 200 { t.Errorf("status %d", w.Code) }
+    // Verify only kalshi_categories changed, other settings untouched
+}
+
+func TestPostSettings_PrivateKeyNotReturnedInResponse(t *testing.T) {
+    s := setupTestServer(t)
+    body := strings.NewReader(`{"kalshi_private_key": "-----BEGIN RSA PRIVATE KEY-----\ntest\n-----END RSA PRIVATE KEY-----"}`)
+    req := httptest.NewRequest("POST", "/api/settings", body)
+    req.Header.Set("Content-Type", "application/json")
+    w := httptest.NewRecorder()
+    s.router.ServeHTTP(w, req)
+    // Response should confirm save but not echo the key back
+    if strings.Contains(w.Body.String(), "BEGIN RSA") {
+        t.Error("private key leaked in POST response")
+    }
+}
+
+func TestShellRoute(t *testing.T) {
+    s := setupTestServer(t)
+    req := httptest.NewRequest("GET", "/", nil)
+    w := httptest.NewRecorder()
+    s.router.ServeHTTP(w, req)
+    if w.Code != 200 { t.Errorf("status %d", w.Code) }
+    if !strings.Contains(w.Body.String(), "iframe") { t.Error("shell page should contain iframe") }
+}
+
+func TestReaderRoute(t *testing.T) {
+    s := setupTestServer(t)
+    req := httptest.NewRequest("GET", "/reader", nil)
+    w := httptest.NewRecorder()
+    s.router.ServeHTTP(w, req)
+    if w.Code != 200 { t.Errorf("status %d", w.Code) }
+}
+
+func TestSettingsRoute(t *testing.T) {
+    s := setupTestServer(t)
+    req := httptest.NewRequest("GET", "/settings", nil)
+    w := httptest.NewRecorder()
+    s.router.ServeHTTP(w, req)
+    if w.Code != 200 { t.Errorf("status %d", w.Code) }
+}
+
+func TestOldReaderRoutesRemoved(t *testing.T) {
+    // After Phase 2, /feed/{id} should 404 (moved to /reader/feed/{id})
+    s := setupTestServer(t)
+    req := httptest.NewRequest("GET", "/feed/1", nil)
+    w := httptest.NewRecorder()
+    s.router.ServeHTTP(w, req)
+    if w.Code != 404 { t.Errorf("old /feed/ route should 404, got %d", w.Code) }
+}
+```
+
+#### 8. CSS token coverage test (optional but recommended)
+
+```go
+func TestReportCSS_NoOrphanedHardcodedColors(t *testing.T) {
+    // Generate a report and scan the HTML for common hardcoded colors
+    // that should have been replaced with var(--token) references.
+    html, _ := GenerateHTMLReportString(/* minimal data */)
+
+    orphans := []string{
+        "#2563eb", "#1d4ed8", "#f8fafc", "#1e293b",
+        "#64748b", "#e2e8f0", "#16a34a", "#dc2626",
+    }
+    for _, color := range orphans {
+        // Count occurrences outside of the Kelly criterion dark panel
+        // (Kelly panel keeps hardcoded colors by design)
+        if strings.Count(html, color) > 0 {
+            // Extract surrounding context to check if it's in the Kelly panel
+            // This is a rough check — visual review is still needed
+            t.Logf("WARNING: found %s in report HTML (may need token replacement)", color)
+        }
+    }
+}
+```
+
+### Phase 2 Verification Gate
+
+Automated:
+```bash
+go build ./...    # compiles
+go vet ./...      # no issues
+go test ./...     # all Phase 1 + Phase 2 tests pass
+```
+
+Manual:
+- [ ] `GET /` → tabbed shell loads, Reader tab active by default
+- [ ] Click "Markets" tab → shows Kalshi report in iframe
+- [ ] Click back to "Reader" tab → reader loads in iframe
+- [ ] Tab state persists across page reload (via localStorage / URL hash)
+- [ ] Theme toggle (light → dark) → both shell and iframe content switch
+- [ ] Theme persists across tab switches
+- [ ] Theme persists across page reload
+- [ ] Hamburger → Settings → full settings page loads
+- [ ] Settings page: change polling interval → save → verify via GET /api/settings
+- [ ] Settings page: enter Kalshi API key + private key → save
+- [ ] Settings page: "Test Connection" button → shows success/failure
+- [ ] Settings page: toggle categories → save → verify via GET /api/settings
+- [ ] Settings page: private key textarea never shows the actual stored key
+- [ ] RSS reader works at `/reader` in light mode
+- [ ] RSS reader works at `/reader` in dark mode
+- [ ] Kalshi report works at `/markets` in light mode
+- [ ] Kalshi report works at `/markets` in dark mode
+- [ ] First-run setup page works (no DB_URL → setup → connect → redirect to shell)
+- [ ] Docker build and run with PostgreSQL end-to-end
+
+### What Cannot Be Tested Without Live Credentials
+
+The following require a real Kalshi API key + private key and cannot be automated in CI:
+- Full scan execution (API calls to Kalshi)
+- Settings page "Test Connection" with real credentials
+- Report content accuracy (market data correctness)
+- Background scheduler producing real reports
+
+These are covered by the manual verification checklists above.
+
+### Test File Summary
+
+| File (all under `infovore/`) | Phase | Tests | Notes |
+|------------------------------|-------|-------|-------|
+| `internal/kalshi/auth/signer_test.go` | 1 | 15 existing + 6 new | Add `NewSignerFromBytes` + `parsePEMKey` tests |
+| `internal/kalshi/scanner/kelly_test.go` | 1 | 10 existing | Carried over unchanged |
+| `internal/kalshi/config/config_test.go` | 1 | ~7 new | `LoadFromStore` with mock Store |
+| `internal/kalshi/scanner/report_test.go` | 1 | ~3 new | `GenerateHTMLReportString` output validation |
+| `internal/kalshi/scanner/run_test.go` | 1 | ~3 new | `RunScan` config validation (early-exit errors) |
+| `internal/database/postgres_test.go` | 1 | ~5 new | Store methods (requires `TEST_DB_URL`, skipped otherwise) |
+| `internal/server/kalshi_test.go` | 1 | ~4 new | KalshiManager HTTP handlers via httptest |
+| `internal/server/server_test.go` | 2 | ~7 new | Settings API, shell/reader/settings routes |
+
+**Total: ~25 existing tests carried over + ~35 new tests written across both phases.**
+
+---
+
+## Execution Phases
+
+This plan is too large for a single Claude session (~22 files, ~1000 lines of new/changed code). Split into two phases with a clear verification gate between them.
+
+### Phase 1: Backend + Kalshi Integration
+
+**Goal**: Kalshi scanning works end-to-end through the Infovore binary — scan triggers via API, reports stored in PostgreSQL, served at `/markets`. Existing Infovore reader is **completely unchanged** (still at `/`, settings still work as before). No visual changes.
+
+**Steps**: 1, 2, 3, 5, 7 (run.go + GenerateHTMLReportString), 6 (KalshiManager + routes), 10 (scheduler), 11 (Dockerfile), 12 (CLI flags), 13 (docs/db.md)
+
+**Files touched** (~20):
+| File | Change |
+|------|--------|
+| `internal/kalshi/*` | NEW — entire directory copied from kalshi_API, imports updated |
+| `internal/kalshi/config/config.go` | Add `LoadFromStore()`, add `PrivateKeyData` field |
+| `internal/kalshi/config/config_test.go` | NEW — `LoadFromStore` tests with mock Store (~7 tests) |
+| `internal/kalshi/auth/signer.go` | Add `NewSignerFromBytes()`, extract `parsePEMKey()` |
+| `internal/kalshi/auth/signer_test.go` | Add `NewSignerFromBytes` + `parsePEMKey` tests (~6 new) |
+| `internal/kalshi/client/client.go` | Update `New()` to handle `PrivateKeyData` |
+| `internal/kalshi/scanner/run.go` | NEW — `RunScan()` extracted from cmd/kalshi/main.go |
+| `internal/kalshi/scanner/run_test.go` | NEW — config validation tests (~3 tests) |
+| `internal/kalshi/scanner/report.go` | Add `GenerateHTMLReportString()` |
+| `internal/kalshi/scanner/report_test.go` | NEW — report output validation (~3 tests) |
+| `internal/database/store.go` | Add Kalshi store methods + `ScanLogEntry` type |
+| `internal/database/postgres.go` | Add Kalshi tables, new methods, settings defaults |
+| `internal/database/postgres_test.go` | NEW — store method tests, requires `TEST_DB_URL` (~5 tests) |
+| `internal/database/sqlite.go` | DELETED |
+| `internal/server/server.go` | Register `/api/kalshi/*` and `/markets` routes (reader routes unchanged) |
+| `internal/server/kalshi.go` | NEW — KalshiManager, handlers, scheduler |
+| `internal/server/kalshi_test.go` | NEW — HTTP handler tests via httptest (~4 tests) |
+| `main.go` | Remove SQLite fallback, require DB_URL, init KalshiManager |
+| `go.mod` / `go.sum` | Remove SQLite deps |
+| `Dockerfile` | Simplify to single binary |
+| `docs/db.md` | NEW — Proxmox VM + PostgreSQL setup |
+
+**Verification gate**: See **Testing Plan → Phase 1 Verification Gate** above for the full automated + manual checklist.
+
+### Phase 2: UI Unification
+
+**Goal**: Tabbed shell, unified theme system (light/dark), unified Settings page. Reader moves to `/reader`, shell serves at `/`.
+
+**Steps**: 4 (theme.css), 8 (settings page + route reorg), 9 (shell.html + tabs), plus report.go CSS token replacement
+
+**Files touched** (~13):
+| File | Change |
+|------|--------|
+| `internal/server/static/css/theme.css` | NEW — design tokens (light + dark) |
+| `internal/server/static/css/style.css` | Replace hardcoded colors → tokens |
+| `internal/kalshi/scanner/report.go` | Replace ~100 hardcoded colors → tokens, remove inline settings dialog, update API paths to `/api/kalshi/*`, add `<link>` to theme.css |
+| `internal/server/templates/shell.html` | NEW — tabbed shell with iframe, theme toggle |
+| `internal/server/templates/settings.html` | NEW — unified settings page |
+| `internal/server/static/js/settings.js` | NEW — settings page logic |
+| `internal/server/templates/layout.html` | Add theme.css link, add hamburger menu, remove gear modal |
+| `internal/server/static/js/app.js` | Remove settings modal, update links to `/reader/*` |
+| `internal/server/server.go` | Move reader routes to `/reader`, add `/` (shell), `/settings`; rewrite settings handlers; delete database-settings handlers |
+| `internal/server/server_test.go` | NEW — settings API + route tests (~7 tests) |
+| `main.go` | Add first-run setup page logic (no DB_URL → setup) |
+
+**Verification gate**: See **Testing Plan → Phase 2 Verification Gate** above for the full automated + manual checklist.
+
+### Why This Split Works
+
+Phase 1 is **purely additive** — it adds Kalshi functionality alongside the existing Infovore reader without changing any existing routes, templates, CSS, or JS. If Phase 2 is never started, Infovore still works exactly as before, plus there's a Kalshi scanner available at `/markets`.
+
+Phase 2 is a **visual refactor** — it changes the URL structure, adds the shell/tabs/theme, and unifies settings. It builds on the Phase 1 foundation but doesn't need any new backend logic.
+
+Each phase fits within a Claude Pro 5-hour session. Phase 1 is ~20 files (including tests) with more Go backend work. Phase 2 is ~13 files with more HTML/CSS/JS frontend work.

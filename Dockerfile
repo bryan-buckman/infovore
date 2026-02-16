@@ -26,7 +26,7 @@ WORKDIR /app
 # Copy binary from builder
 COPY --from=builder /app/infovore .
 
-# Create data directory for SQLite database
+# Create data directory for .env file
 RUN mkdir -p /data
 
 # Run as non-root user
@@ -37,31 +37,20 @@ USER infovore
 EXPOSE 8080
 
 # Database Configuration:
-# The app reads DB_URL from environment variables or /data/.env file.
-# You can also configure the database via the web UI Settings panel.
-#
-# Options:
-#   SQLite (default): Leave DB_URL empty, uses /data/infovore.db
-#   PostgreSQL: Set DB_URL=postgres://user:pass@host:5432/dbname
+# PostgreSQL is REQUIRED. Set DB_URL via environment variable or /data/.env file.
 #
 # Configuration methods:
 #   1. Environment variable: docker run -e DB_URL="postgres://..."
 #   2. .env file: Mount a ConfigMap/Secret to /data/.env
-#   3. Web UI: Go to Settings and enter the database URL
 #
-# Example docker run commands:
-#   SQLite:    docker run -p 8080:8080 -v infovore-data:/data infovore
-#   PostgreSQL: docker run -p 8080:8080 -v infovore-data:/data -e DB_URL="postgres://..." infovore
+# Example:
+#   docker run -p 8080:8080 -v infovore-data:/data \
+#     -e DB_URL="postgres://user:pass@host:5432/infovore?sslmode=disable" infovore
 #
-# Kubernetes example (mount .env from Secret):
-#   volumeMounts:
-#     - name: db-config
-#       mountPath: /data/.env
-#       subPath: .env
-#   volumes:
-#     - name: db-config
-#       secret:
-#         secretName: infovore-db
+# Kalshi Configuration:
+#   After first boot, set Kalshi API credentials in the Settings UI or via SQL:
+#     UPDATE settings SET value = 'your-key-id' WHERE key = 'kalshi_api_key_id';
+#     UPDATE settings SET value = '-----BEGIN PRIVATE KEY-----...' WHERE key = 'kalshi_private_key';
 
-# Default command uses SQLite with data directory
-CMD ["./infovore", "-addr", ":8080", "-db", "/data/infovore.db", "-data-dir", "/data"]
+# Default command — DB_URL must be provided via environment
+CMD ["./infovore", "-addr", ":8080", "-data-dir", "/data"]

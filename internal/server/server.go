@@ -38,6 +38,7 @@ type Server struct {
 	router     chi.Router
 	httpServer *http.Server
 	templates  *template.Template
+	kalshi     *KalshiManager
 }
 
 // New creates a new server.
@@ -55,6 +56,7 @@ func New(db database.Store) (*Server, error) {
 		fetcher:   rss.NewFetcher(db),
 		poller:    rss.NewPoller(db),
 		templates: tmpl,
+		kalshi:    NewKalshiManager(db),
 	}
 	s.setupRoutes()
 	return s, nil
@@ -95,7 +97,15 @@ func (s *Server) setupRoutes() {
 		r.Post("/folder", s.handleAddFolder)
 		r.Get("/database-settings", s.handleGetDatabaseSettings)
 		r.Post("/database-settings", s.handleSaveDatabaseSettings)
+
+		// Kalshi API
+		r.Get("/kalshi/status", s.kalshi.HandleKalshiStatus)
+		r.Post("/kalshi/refresh", s.kalshi.HandleKalshiRefresh)
+		r.Get("/kalshi/log", s.kalshi.HandleKalshiLog)
 	})
+
+	// Kalshi markets page
+	r.Get("/markets", s.kalshi.HandleMarketsPage)
 
 	s.router = r
 }
@@ -114,6 +124,11 @@ func (s *Server) Start(addr string) error {
 
 // Stop gracefully shuts down the server and poller.
 func (s *Server) Stop() {
+	log.Println("Stopping Kalshi scheduler...")
+	if s.kalshi != nil {
+		s.kalshi.Stop()
+	}
+
 	log.Println("Stopping poller...")
 	s.poller.Stop()
 

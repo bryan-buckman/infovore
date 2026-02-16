@@ -94,11 +94,32 @@ func (db *PostgresStore) migrate() error {
 	);
 	INSERT INTO settings (key, value) VALUES ('polling_interval_minutes', '15') ON CONFLICT (key) DO NOTHING;
 
+	-- Kalshi tables
+	CREATE TABLE IF NOT EXISTS kalshi_reports (
+		id BIGSERIAL PRIMARY KEY,
+		html TEXT NOT NULL,
+		created_at TIMESTAMP NOT NULL DEFAULT NOW()
+	);
+	CREATE TABLE IF NOT EXISTS kalshi_scan_log (
+		id BIGSERIAL PRIMARY KEY,
+		output TEXT NOT NULL DEFAULT '',
+		error TEXT NOT NULL DEFAULT '',
+		created_at TIMESTAMP NOT NULL DEFAULT NOW()
+	);
+
+	-- Kalshi default settings
+	INSERT INTO settings (key, value) VALUES ('kalshi_api_key_id', '') ON CONFLICT (key) DO NOTHING;
+	INSERT INTO settings (key, value) VALUES ('kalshi_private_key', '') ON CONFLICT (key) DO NOTHING;
+	INSERT INTO settings (key, value) VALUES ('kalshi_environment', 'prod') ON CONFLICT (key) DO NOTHING;
+	INSERT INTO settings (key, value) VALUES ('kalshi_categories', 'Politics') ON CONFLICT (key) DO NOTHING;
+	INSERT INTO settings (key, value) VALUES ('kalshi_scan_interval_hours', '6') ON CONFLICT (key) DO NOTHING;
+
 	-- Create indexes for better query performance
 	CREATE INDEX IF NOT EXISTS idx_items_feed_id ON items(feed_id);
 	CREATE INDEX IF NOT EXISTS idx_items_published_at ON items(published_at DESC);
 	CREATE INDEX IF NOT EXISTS idx_feeds_folder_id ON feeds(folder_id);
 	CREATE INDEX IF NOT EXISTS idx_items_is_read ON items(is_read);
+	CREATE INDEX IF NOT EXISTS idx_kalshi_reports_created_at ON kalshi_reports(created_at DESC);
 	`
 	_, err := db.conn.Exec(schema)
 	return err
@@ -493,4 +514,61 @@ func scanItemsPg(rows *sql.Rows) ([]model.Item, error) {
 		items = append(items, it)
 	}
 	return items, rows.Err()
+}
+
+// --- Kalshi Methods ---
+
+// SaveKalshiReport inserts a new HTML report, keeping only the 5 most recent.
+func (db *PostgresStore) SaveKalshiReport(html string) error {
+	_, err := db.conn.Exec(`INSERT INTO kalshi_reports (html) VALUES ($1)`, html)
+	if err != nil {
+		return fmt.Errorf("save kalshi report: %w", err)
+	}
+	// Prune old reports, keep last 5
+	_, _ = db.conn.Exec(`DELETE FROM kalshi_reports WHERE id NOT IN (SELECT id FROM kalshi_reports ORDER BY created_at DESC LIMIT 5)`)
+	return nil
+}
+
+// GetLatestKalshiReport returns the most recent report HTML and timestamp.
+func (db *PostgresStore) GetLatestKalshiReport() (string, time.Time, error) {
+	var html string
+	var createdAt time.Time
+	err := db.conn.QueryRow(`SELECT html, created_at FROM kalshi_reports ORDER BY created_at DESC LIMIT 1`).Scan(&html, &createdAt)
+	if err == sql.ErrNoRows {
+		return "", time.Time{}, nil
+	}
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("get latest kalshi report: %w", err)
+	}
+	return html, createdAt, nil
+}
+
+// AddKalshiScanLog records a scan execution (output + error text).
+func (db *PostgresStore) AddKalshiScanLog(output, errMsg string) error {
+	_, err := db.conn.Exec(`INSERT INTO kalshi_scan_log (output, error) VALUES ($1, $2)`, output, errMsg)
+	if err != nil {
+		return fmt.Errorf("add kalshi scan log: %w", err)
+	}
+	// Prune old logs, keep last 20
+	_, _ = db.conn.Exec(`DELETE FROM kalshi_scan_log WHERE id NOT IN (SELECT id FROM kalshi_scan_log ORDER BY created_at DESC LIMIT 20)`)
+	return nil
+}
+
+// GetKalshiScanLog returns the most recent scan log entries.
+func (db *PostgresStore) GetKalshiScanLog(limit int) ([]ScanLogEntry, error) {
+	rows, err := db.conn.Query(`SELECT id, output, error, created_at FROM kalshi_scan_log ORDER BY created_at DESC LIMIT $1`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("get kalshi scan log: %w", err)
+	}
+	defer rows.Close()
+
+	var entries []ScanLogEntry
+	for rows.Next() {
+		var e ScanLogEntry
+		if err := rows.Scan(&e.ID, &e.Output, &e.Error, &e.CreatedAt); err != nil {
+			return nil, err
+		}
+		entries = append(entries, e)
+	}
+	return entries, rows.Err()
 }

@@ -7,8 +7,15 @@ import (
 	"github.com/bryan-buckman/infovore/internal/model"
 )
 
+// ScanLogEntry represents a single Kalshi scan log record.
+type ScanLogEntry struct {
+	ID        int64
+	Output    string
+	Error     string
+	CreatedAt time.Time
+}
+
 // Store defines the interface for database operations.
-// Both SQLite and PostgreSQL implementations satisfy this interface.
 type Store interface {
 	Close() error
 
@@ -56,4 +63,10 @@ type Store interface {
 	GetSetting(key string) (string, error)
 	SetSetting(key, value string) error
 	GetPollingInterval() (int, error)
+
+	// Kalshi operations
+	SaveKalshiReport(html string) error
+	GetLatestKalshiReport() (html string, generatedAt time.Time, err error)
+	AddKalshiScanLog(output, errMsg string) error
+	GetKalshiScanLog(limit int) ([]ScanLogEntry, error)
 }
