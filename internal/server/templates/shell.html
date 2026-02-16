@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Infovore</title>
+    <link rel="stylesheet" href="/static/css/theme.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <script>
+        /* FOUC prevention: apply saved theme before first paint */
+        (function () {
+            var t = localStorage.getItem('theme');
+            if (t === 'dark' || (!t && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+                document.documentElement.setAttribute('data-theme', 'dark');
+            }
+        })();
+    </script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html,
+        body {
+            height: 100%;
+            overflow: hidden;
+            font-family: 'Inter', sans-serif;
+            background: var(--bg);
+            color: var(--text);
+        }
+
+        /* ---- Shell layout ---- */
+        .shell {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+
+        /* ---- Tab bar ---- */
+        .tab-bar {
+            display: flex;
+            align-items: center;
+            height: 48px;
+            min-height: 48px;
+            background: var(--card-bg);
+            border-bottom: 1px solid var(--border);
+            padding: 0 8px;
+            gap: 0;
+            position: relative;
+            z-index: 100;
+        }
+
+        /* Hamburger button */
+        .menu-trigger {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 36px;
+            height: 36px;
+            border: none;
+            border-radius: var(--radius);
+            background: transparent;
+            color: var(--text-muted);
+            font-size: 1.2rem;
+            cursor: pointer;
+            flex-shrink: 0;
+            transition: background 0.15s, color 0.15s;
+        }
+
+        .menu-trigger:hover {
+            background: var(--bg-hover);
+            color: var(--text);
+        }
+
+        /* Tab buttons */
+        .tab-group {
+            display: flex;
+            align-items: stretch;
+            height: 100%;
+            margin-left: 8px;
+        }
+
+        .tab-btn {
+            position: relative;
+            display: flex;
+            align-items: center;
+            padding: 0 20px;
+            border: none;
+            background: transparent;
+            color: var(--text-muted);
+            font-family: inherit;
+            font-size: 0.875rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: color 0.15s;
+            white-space: nowrap;
+        }
+
+        .tab-btn:hover {
+            color: var(--text);
+        }
+
+        .tab-btn.active {
+            color: var(--text);
+        }
+
+        .tab-btn.active::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 8px;
+            right: 8px;
+            height: 2px;
+            background: var(--primary);
+            border-radius: 2px 2px 0 0;
+        }
+
+        /* Right-side actions */
+        .tab-bar-right {
+            margin-left: auto;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        /* Theme toggle */
+        .theme-toggle {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 36px;
+            height: 36px;
+            border: none;
+            border-radius: var(--radius);
+            background: transparent;
+            color: var(--text-muted);
+            font-size: 1.1rem;
+            cursor: pointer;
+            flex-shrink: 0;
+            transition: background 0.15s, color 0.15s;
+        }
+
+        .theme-toggle:hover {
+            background: var(--bg-hover);
+            color: var(--text);
+        }
+
+        /* ---- Dropdown menu ---- */
+        .menu-dropdown {
+            display: none;
+            position: absolute;
+            top: 44px;
+            left: 8px;
+            min-width: 180px;
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            box-shadow: var(--shadow-md);
+            z-index: 200;
+            overflow: hidden;
+        }
+
+        .menu-dropdown.open {
+            display: block;
+        }
+
+        .menu-dropdown-item {
+            display: block;
+            width: 100%;
+            padding: 10px 16px;
+            border: none;
+            background: transparent;
+            color: var(--text);
+            font-family: inherit;
+            font-size: 0.875rem;
+            text-align: left;
+            cursor: pointer;
+            transition: background 0.12s;
+        }
+
+        .menu-dropdown-item:hover {
+            background: var(--bg-hover);
+        }
+
+        .menu-dropdown-item:first-child {
+            border-radius: var(--radius) var(--radius) 0 0;
+        }
+
+        .menu-dropdown-item:last-child {
+            border-radius: 0 0 var(--radius) var(--radius);
+        }
+
+        /* ---- Content frame ---- */
+        .content-frame {
+            flex: 1;
+            border: none;
+            width: 100%;
+            display: block;
+            background: var(--bg);
+        }
+
+        /* ---- Toast ---- */
+        .shell-toast {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 12px 20px;
+            font-family: inherit;
+            font-size: 0.875rem;
+            color: var(--text);
+            box-shadow: var(--shadow-md);
+            z-index: 1000;
+            opacity: 0;
+            transform: translateY(12px);
+            pointer-events: none;
+            transition: opacity 0.25s, transform 0.25s;
+        }
+
+        .shell-toast.visible {
+            opacity: 1;
+            transform: translateY(0);
+            pointer-events: auto;
+        }
+
+        .shell-toast.success {
+            border-left: 3px solid var(--success);
+        }
+
+        .shell-toast.error {
+            border-left: 3px solid var(--danger);
+        }
+    </style>
+</head>
+
+<body>
+    <div class="shell">
+        <!-- Tab bar -->
+        <div class="tab-bar">
+            <button class="menu-trigger" id="menuTrigger" aria-label="Menu" title="Menu">&#9776;</button>
+            <div class="tab-group">
+                <button class="tab-btn" data-tab="reader">Reader</button>
+                <button class="tab-btn" data-tab="markets">Markets</button>
+            </div>
+            <div class="tab-bar-right">
+                <button class="theme-toggle" id="themeToggle" aria-label="Toggle theme" title="Toggle theme"></button>
+            </div>
+            <!-- Hamburger dropdown -->
+            <div class="menu-dropdown" id="menuDropdown">
+                <button class="menu-dropdown-item" id="menuSettings">Settings</button>
+                <button class="menu-dropdown-item" id="menuRefreshScan">Refresh Scan</button>
+            </div>
+        </div>
+
+        <!-- Single iframe for content -->
+        <iframe class="content-frame" id="contentFrame" src="/"></iframe>
+    </div>
+
+    <!-- Toast -->
+    <div class="shell-toast" id="shellToast"></div>
+
+    <script>
+        (function () {
+            'use strict';
+
+            /* ---- Elements ---- */
+            var tabs = document.querySelectorAll('.tab-btn');
+            var frame = document.getElementById('contentFrame');
+            var menuTrigger = document.getElementById('menuTrigger');
+            var menuDropdown = document.getElementById('menuDropdown');
+            var menuSettings = document.getElementById('menuSettings');
+            var menuRefreshScan = document.getElementById('menuRefreshScan');
+            var themeToggle = document.getElementById('themeToggle');
+            var toast = document.getElementById('shellToast');
+
+            /* ---- Tab routing ---- */
+            var TAB_MAP = {
+                reader: '/reader',
+                markets: '/markets'
+            };
+
+            function currentTheme() {
+                return document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+            }
+
+            function updateThemeIcon() {
+                /* Moon for light mode (click to go dark), Sun for dark mode (click to go light) */
+                themeToggle.textContent = currentTheme() === 'dark' ? '\u2600' : '\u263D';
+            }
+
+            function activateTab(name, pushState) {
+                if (!TAB_MAP[name]) name = 'reader';
+                var src = TAB_MAP[name];
+
+                tabs.forEach(function (btn) {
+                    btn.classList.toggle('active', btn.getAttribute('data-tab') === name);
+                });
+
+                /* Only reload iframe if the source actually changed */
+                var currentPath;
+                try {
+                    currentPath = new URL(frame.src, location.origin).pathname;
+                } catch (e) {
+                    currentPath = '';
+                }
+                if (currentPath !== src) {
+                    frame.src = src;
+                }
+
+                /* Persist */
+                localStorage.setItem('shell-tab', name);
+                if (pushState) {
+                    history.replaceState(null, '', '#' + name);
+                }
+            }
+
+            /* Tab click handlers */
+            tabs.forEach(function (btn) {
+                btn.addEventListener('click', function () {
+                    activateTab(btn.getAttribute('data-tab'), true);
+                });
+            });
+
+            /* Determine initial tab: hash > localStorage > default (reader) */
+            function initialTab() {
+                var hash = location.hash.replace('#', '');
+                if (TAB_MAP[hash]) return hash;
+                var saved = localStorage.getItem('shell-tab');
+                if (TAB_MAP[saved]) return saved;
+                return 'reader';
+            }
+
+            /* ---- Hamburger menu ---- */
+            menuTrigger.addEventListener('click', function (e) {
+                e.stopPropagation();
+                menuDropdown.classList.toggle('open');
+            });
+
+            document.addEventListener('click', function () {
+                menuDropdown.classList.remove('open');
+            });
+
+            menuDropdown.addEventListener('click', function (e) {
+                e.stopPropagation();
+            });
+
+            menuSettings.addEventListener('click', function () {
+                menuDropdown.classList.remove('open');
+                window.location.href = '/settings';
+            });
+
+            menuRefreshScan.addEventListener('click', function () {
+                menuDropdown.classList.remove('open');
+                fetch('/api/kalshi/refresh', { method: 'POST' })
+                    .then(function (res) {
+                        if (res.ok) {
+                            showToast('Scan started', 'success');
+                        } else if (res.status === 409) {
+                            showToast('Scan already in progress', 'error');
+                        } else {
+                            showToast('Failed to start scan', 'error');
+                        }
+                    })
+                    .catch(function () {
+                        showToast('Network error', 'error');
+                    });
+            });
+
+            /* ---- Theme toggle ---- */
+            themeToggle.addEventListener('click', function () {
+                var next = currentTheme() === 'dark' ? 'light' : 'dark';
+                document.documentElement.setAttribute('data-theme', next);
+                localStorage.setItem('theme', next);
+                updateThemeIcon();
+
+                /* Notify iframe */
+                try {
+                    frame.contentWindow.postMessage({ type: 'theme-changed', value: next }, '*');
+                } catch (e) { /* cross-origin guard */ }
+
+                /* Fire-and-forget persist to DB */
+                fetch('/api/settings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ theme: next })
+                }).catch(function () { /* silent */ });
+            });
+
+            /* ---- Toast ---- */
+            var toastTimer;
+
+            function showToast(msg, type) {
+                clearTimeout(toastTimer);
+                toast.textContent = msg;
+                toast.className = 'shell-toast visible ' + (type || '');
+                toastTimer = setTimeout(function () {
+                    toast.classList.remove('visible');
+                }, 3000);
+            }
+
+            /* ---- Hash change ---- */
+            window.addEventListener('hashchange', function () {
+                var hash = location.hash.replace('#', '');
+                if (TAB_MAP[hash]) activateTab(hash, false);
+            });
+
+            /* ---- Init ---- */
+            updateThemeIcon();
+            activateTab(initialTab(), true);
+        })();
+    </script>
+</body>
+
+</html>

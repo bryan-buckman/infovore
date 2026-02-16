@@ -1,0 +1,73 @@
+/* Unified Design Tokens — Infovore + Kalshi Markets
+ * Light theme (default) uses the Kalshi scanner's financial aesthetic.
+ * Dark theme uses Infovore's GitHub-dark palette, harmonized.
+ *
+ * Usage: both style.css (reader) and report.go (markets) reference
+ * these tokens via var(--token). The shell page links this file;
+ * iframed pages also link it for direct access.
+ */
+
+:root {
+  /* Primary accent */
+  --primary:       #2563eb;
+  --primary-dark:  #1d4ed8;
+  --primary-light: #3b82f6;
+
+  /* Semantic */
+  --success: #16a34a;
+  --danger:  #dc2626;
+  --warning: #d97706;
+
+  /* Backgrounds */
+  --bg:          #f8fafc;
+  --bg-secondary:#f1f5f9;
+  --card-bg:     #ffffff;
+  --bg-hover:    #f1f5f9;
+  --bg-input:    #ffffff;
+  --bg-overlay:  rgba(0, 0, 0, 0.5);
+
+  /* Text */
+  --text:           #1e293b;
+  --text-muted:     #64748b;
+  --text-on-primary:#ffffff;
+
+  /* Borders & shadows */
+  --border:    #e2e8f0;
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.08);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.12);
+
+  /* Layout */
+  --radius: 8px;
+}
+
+[data-theme="dark"] {
+  /* Primary accent — brighter for dark bg */
+  --primary:       #58a6ff;
+  --primary-dark:  #79c0ff;
+  --primary-light: #388bfd;
+
+  /* Semantic */
+  --success: #3fb950;
+  --danger:  #f85149;
+  --warning: #d29922;
+
+  /* Backgrounds */
+  --bg:          #0d1117;
+  --bg-secondary:#161b22;
+  --card-bg:     #161b22;
+  --bg-hover:    #21262d;
+  --bg-input:    #21262d;
+  --bg-overlay:  rgba(0, 0, 0, 0.7);
+
+  /* Text */
+  --text:           #f0f6fc;
+  --text-muted:     #8b949e;
+  --text-on-primary:#ffffff;
+
+  /* Borders & shadows */
+  --border:    #30363d;
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.4);
+}

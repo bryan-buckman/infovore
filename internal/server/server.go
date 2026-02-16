@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/bryan-buckman/infovore/internal/database"
+	kalshiconfig "github.com/bryan-buckman/infovore/internal/kalshi/config"
 	"github.com/bryan-buckman/infovore/internal/model"
 	"github.com/bryan-buckman/infovore/internal/opml"
 	"github.com/bryan-buckman/infovore/internal/rss"
@@ -72,10 +73,16 @@ func (s *Server) setupRoutes() {
 	staticSub, _ := fs.Sub(staticFS, "static")
 	r.Handle("/static/*", http.StripPrefix("/static/", http.FileServer(http.FS(staticSub))))
 
-	// Pages.
-	r.Get("/", s.handleHome)
-	r.Get("/feed/{feedID}", s.handleFeed)
-	r.Get("/folder/{folderID}", s.handleFolder)
+	// Shell page (tabbed container).
+	r.Get("/", s.handleShell)
+
+	// Reader pages (inside iframe).
+	r.Get("/reader", s.handleHome)
+	r.Get("/reader/feed/{feedID}", s.handleFeed)
+	r.Get("/reader/folder/{folderID}", s.handleFolder)
+
+	// Settings page.
+	r.Get("/settings", s.handleSettings)
 
 	// API.
 	r.Route("/api", func(r chi.Router) {
@@ -83,6 +90,7 @@ func (s *Server) setupRoutes() {
 		r.Post("/delete-read", s.handleDeleteRead)
 		r.Post("/settings", s.handleSaveSettings)
 		r.Get("/settings", s.handleGetSettings)
+		r.Post("/settings/test-kalshi", s.handleTestKalshi)
 		r.Post("/import-opml", s.handleImportOPML)
 		r.Get("/export-opml", s.handleExportOPML)
 		r.Post("/refresh", s.handleRefresh)
@@ -104,7 +112,7 @@ func (s *Server) setupRoutes() {
 		r.Get("/kalshi/log", s.kalshi.HandleKalshiLog)
 	})
 
-	// Kalshi markets page
+	// Kalshi markets page (inside iframe).
 	r.Get("/markets", s.kalshi.HandleMarketsPage)
 
 	s.router = r
@@ -145,19 +153,24 @@ func (s *Server) Stop() {
 
 // --- Page Handlers ---
 
+func (s *Server) handleShell(w http.ResponseWriter, r *http.Request) {
+	s.render(w, "shell.html", nil)
+}
+
+func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
+	s.render(w, "settings.html", nil)
+}
+
 func (s *Server) handleHome(w http.ResponseWriter, r *http.Request) {
 	foldersWithFeeds, _ := s.db.GetFoldersWithFeeds()
 	unfiledFeeds, _ := s.db.GetUnfiledFeeds()
 	items, _ := s.db.GetAllItems(false)
-	interval, _ := s.db.GetPollingInterval()
 
 	data := map[string]interface{}{
 		"FoldersWithFeeds": foldersWithFeeds,
 		"UnfiledFeeds":     unfiledFeeds,
 		"Items":            items,
-		"PollingInterval":  interval,
 		"PageTitle":        "All Items",
-		"DatabaseType":     s.db.DatabaseType(),
 	}
 	s.render(w, "layout.html", data)
 }
@@ -169,7 +182,6 @@ func (s *Server) handleFeed(w http.ResponseWriter, r *http.Request) {
 	foldersWithFeeds, _ := s.db.GetFoldersWithFeeds()
 	unfiledFeeds, _ := s.db.GetUnfiledFeeds()
 	items, _ := s.db.GetItems(feedID, false)
-	interval, _ := s.db.GetPollingInterval()
 
 	// Get feed name and error for title.
 	pageTitle := "Feed"
@@ -184,10 +196,8 @@ func (s *Server) handleFeed(w http.ResponseWriter, r *http.Request) {
 		"UnfiledFeeds":     unfiledFeeds,
 		"Items":            items,
 		"CurrentFeedID":    feedID,
-		"PollingInterval":  interval,
 		"PageTitle":        pageTitle,
 		"FeedError":        feedError,
-		"DatabaseType":     s.db.DatabaseType(),
 	}
 	s.render(w, "layout.html", data)
 }
@@ -199,7 +209,6 @@ func (s *Server) handleFolder(w http.ResponseWriter, r *http.Request) {
 	foldersWithFeeds, _ := s.db.GetFoldersWithFeeds()
 	unfiledFeeds, _ := s.db.GetUnfiledFeeds()
 	items, _ := s.db.GetItemsByFolderID(folderID, false)
-	interval, _ := s.db.GetPollingInterval()
 
 	// Get folder name for title.
 	pageTitle := "Folder"
@@ -212,9 +221,7 @@ func (s *Server) handleFolder(w http.ResponseWriter, r *http.Request) {
 		"UnfiledFeeds":     unfiledFeeds,
 		"Items":            items,
 		"CurrentFolderID":  folderID,
-		"PollingInterval":  interval,
 		"PageTitle":        pageTitle,
-		"DatabaseType":     s.db.DatabaseType(),
 	}
 	s.render(w, "layout.html", data)
 }
@@ -238,31 +245,138 @@ func (s *Server) handleMarkRead(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSaveSettings(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		PollingInterval int `json:"polling_interval"`
-	}
+	var req map[string]interface{}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
 	}
-	// Enforce minimum.
-	if req.PollingInterval < rss.MinPollingIntervalMinutes {
-		req.PollingInterval = rss.MinPollingIntervalMinutes
+
+	// Polling interval
+	if v, ok := req["polling_interval"]; ok {
+		if fv, ok := v.(float64); ok {
+			interval := int(fv)
+			if interval < rss.MinPollingIntervalMinutes {
+				interval = rss.MinPollingIntervalMinutes
+			}
+			s.db.SetSetting(model.SettingPollingInterval, strconv.Itoa(interval))
+		}
 	}
-	if err := s.db.SetSetting(model.SettingPollingInterval, strconv.Itoa(req.PollingInterval)); err != nil {
-		http.Error(w, "Failed to save", http.StatusInternalServerError)
-		return
+
+	// Kalshi API Key ID
+	if v, ok := req["kalshi_api_key_id"]; ok {
+		if sv, ok := v.(string); ok {
+			s.db.SetSetting("kalshi_api_key_id", sv)
+		}
 	}
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "polling_interval": req.PollingInterval})
+
+	// Kalshi Private Key (write-only)
+	if v, ok := req["kalshi_private_key"]; ok {
+		if sv, ok := v.(string); ok && sv != "" {
+			s.db.SetSetting("kalshi_private_key", sv)
+		}
+	}
+
+	// Kalshi Categories
+	if v, ok := req["kalshi_categories"]; ok {
+		if sv, ok := v.(string); ok {
+			s.db.SetSetting("kalshi_categories", sv)
+		}
+	}
+
+	// Kalshi Scan Interval
+	if v, ok := req["kalshi_scan_interval_hours"]; ok {
+		if fv, ok := v.(float64); ok {
+			hours := int(fv)
+			if hours < 1 {
+				hours = 1
+			}
+			s.db.SetSetting("kalshi_scan_interval_hours", strconv.Itoa(hours))
+		}
+	}
+
+	// Theme
+	if v, ok := req["theme"]; ok {
+		if sv, ok := v.(string); ok {
+			s.db.SetSetting("theme", sv)
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	interval, _ := s.db.GetPollingInterval()
+
+	// Kalshi settings
+	kalshiKeyID, _ := s.db.GetSetting("kalshi_api_key_id")
+	kalshiKey, _ := s.db.GetSetting("kalshi_private_key")
+	kalshiCategories, _ := s.db.GetSetting("kalshi_categories")
+	kalshiScanInterval, _ := s.db.GetSetting("kalshi_scan_interval_hours")
+	theme, _ := s.db.GetSetting("theme")
+
+	scanHours, err := strconv.Atoi(kalshiScanInterval)
+	if err != nil || scanHours < 1 {
+		scanHours = 6
+	}
+
+	// Database info
+	envFilePath := os.Getenv("INFOVORE_ENV_FILE")
+	if envFilePath == "" {
+		envFilePath = ".env"
+	}
+	dbURL := ""
+	if file, err := os.Open(envFilePath); err == nil {
+		scanner := bufio.NewScanner(file)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if strings.HasPrefix(line, "DB_URL=") {
+				dbURL = strings.TrimPrefix(line, "DB_URL=")
+				if len(dbURL) >= 2 && ((dbURL[0] == '"' && dbURL[len(dbURL)-1] == '"') ||
+					(dbURL[0] == '\'' && dbURL[len(dbURL)-1] == '\'')) {
+					dbURL = dbURL[1 : len(dbURL)-1]
+				}
+				break
+			}
+		}
+		file.Close()
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"polling_interval": interval,
+		"polling_interval":              interval,
+		"kalshi_api_key_id":             kalshiKeyID,
+		"kalshi_private_key_configured": kalshiKey != "",
+		"kalshi_categories":             kalshiCategories,
+		"kalshi_scan_interval_hours":    scanHours,
+		"theme":                         theme,
+		"db_url":                        dbURL,
+		"database_type":                 s.db.DatabaseType(),
 	})
+}
+
+func (s *Server) handleTestKalshi(w http.ResponseWriter, r *http.Request) {
+	keyID, _ := s.db.GetSetting("kalshi_api_key_id")
+	key, _ := s.db.GetSetting("kalshi_private_key")
+
+	if keyID == "" || key == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "Kalshi API key and private key must be configured first"})
+		return
+	}
+
+	// Try to load config from settings — this validates the key format
+	_, err := kalshiconfig.LoadFromSettings(s.db)
+	if err != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
 func (s *Server) handleImportOPML(w http.ResponseWriter, r *http.Request) {

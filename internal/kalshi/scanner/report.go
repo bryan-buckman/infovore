@@ -22,19 +22,19 @@ const reportTemplate = `<!DOCTYPE html>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <style>
-        :root {
-            --primary: #2563eb;
-            --primary-dark: #1d4ed8;
-            --success: #16a34a;
-            --danger: #dc2626;
-            --warning: #d97706;
-            --bg: #f8fafc;
-            --card-bg: #ffffff;
-            --text: #1e293b;
-            --text-muted: #64748b;
-            --border: #e2e8f0;
+    <link rel="stylesheet" href="/static/css/theme.css">
+    <script>
+    // FOUC prevention — apply saved theme before paint
+    (function(){var t=localStorage.getItem('theme');if(t)document.documentElement.dataset.theme=t;})();
+    // Theme propagation from parent shell iframe
+    window.addEventListener('message',function(e){
+        if(e.data&&e.data.type==='theme-changed'){
+            document.documentElement.dataset.theme=e.data.value;
+            localStorage.setItem('theme',e.data.value);
         }
+    });
+    </script>
+    <style>
         * {
             margin: 0;
             padding: 0;
@@ -496,65 +496,6 @@ const reportTemplate = `<!DOCTYPE html>
         .menu-dropdown button:hover {
             background: var(--bg);
         }
-        /* Settings dialog */
-        .settings-overlay {
-            display: none;
-            position: fixed;
-            inset: 0;
-            z-index: 2000;
-            background: rgba(0,0,0,0.4);
-            align-items: center;
-            justify-content: center;
-        }
-        .settings-overlay.visible {
-            display: flex;
-        }
-        .settings-dialog {
-            background: var(--card-bg);
-            border-radius: 12px;
-            padding: 2rem;
-            max-width: 500px;
-            width: 90%;
-            max-height: 80vh;
-            overflow-y: auto;
-            box-shadow: 0 8px 30px rgba(0,0,0,0.2);
-        }
-        .settings-dialog h3 {
-            font-size: 1.25rem;
-            margin-bottom: 1rem;
-            color: var(--primary);
-        }
-        .settings-dialog h4 {
-            font-size: 0.9rem;
-            color: var(--text-muted);
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            margin-bottom: 0.75rem;
-        }
-        .category-list {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 0.5rem;
-            margin-bottom: 1.5rem;
-        }
-        .category-checkbox {
-            display: flex;
-            align-items: center;
-            gap: 0.5rem;
-            padding: 0.5rem;
-            border-radius: 6px;
-            cursor: pointer;
-            font-size: 0.875rem;
-            transition: background-color 0.15s;
-        }
-        .category-checkbox:hover {
-            background: var(--bg);
-        }
-        .category-checkbox input[type="checkbox"] {
-            width: 18px;
-            height: 18px;
-            accent-color: var(--primary);
-        }
         .category-badge {
             display: inline-block;
             padding: 0.15rem 0.5rem;
@@ -565,40 +506,27 @@ const reportTemplate = `<!DOCTYPE html>
             color: var(--primary);
             margin-left: 0.25rem;
         }
-        .settings-actions {
-            display: flex;
-            gap: 0.75rem;
-            justify-content: flex-end;
-        }
-        .settings-actions button {
-            padding: 0.5rem 1.25rem;
-            border-radius: 6px;
-            font-size: 0.875rem;
-            cursor: pointer;
+        .scan-toast {
+            position: fixed;
+            bottom: 2rem;
+            right: 2rem;
+            background: var(--card-bg);
             border: 1px solid var(--border);
-            background: var(--bg);
+            border-radius: 8px;
+            padding: 0.75rem 1.25rem;
+            font-size: 0.875rem;
             color: var(--text);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            z-index: 3000;
+            opacity: 0;
+            transform: translateY(1rem);
+            transition: opacity 0.3s, transform 0.3s;
+            pointer-events: none;
         }
-        .settings-actions button:first-child {
-            background: var(--primary);
-            color: white;
-            border-color: var(--primary);
-        }
-        .settings-actions button:first-child:hover {
-            background: var(--primary-dark);
-        }
-        .settings-note {
-            color: var(--text-muted);
-            font-size: 0.75rem;
-            margin-top: 0.75rem;
-            text-align: center;
-        }
-        .settings-status {
-            color: var(--success);
-            font-size: 0.8rem;
-            margin-top: 0.5rem;
-            text-align: center;
-            display: none;
+        .scan-toast.visible {
+            opacity: 1;
+            transform: translateY(0);
+            pointer-events: auto;
         }
         @media (max-width: 768px) {
             body {
@@ -622,30 +550,8 @@ const reportTemplate = `<!DOCTYPE html>
         <!-- Hamburger menu -->
         <button class="hamburger-btn" id="hamburger-btn" title="Menu">&#9776;</button>
         <div class="menu-dropdown" id="menu-dropdown">
-            <button id="open-settings">&#9881; Settings</button>
-        </div>
-
-        <!-- Settings dialog -->
-        <div class="settings-overlay" id="settings-overlay">
-            <div class="settings-dialog">
-                <h3>&#9881; Settings</h3>
-                <h4>Market Categories</h4>
-                <p style="color:var(--text-muted);font-size:0.8rem;margin-bottom:0.75rem;">Select which categories to include in the scan. Changes take effect when you click Save &amp; Refresh.</p>
-                <div class="category-list" id="category-list">
-                    {{range .AllCategories}}
-                    <label class="category-checkbox">
-                        <input type="checkbox" value="{{.Name}}" {{if .Active}}checked{{end}}>
-                        {{.Name}}
-                    </label>
-                    {{end}}
-                </div>
-                <div class="settings-actions">
-                    <button id="settings-save">Save &amp; Refresh</button>
-                    <button id="settings-cancel">Cancel</button>
-                </div>
-                <p class="settings-note">Categories are saved to the server. A new scan will start with the selected categories.</p>
-                <p class="settings-status" id="settings-status">Settings saved! Refreshing data...</p>
-            </div>
+            <button onclick="window.top.location.href='/settings'">&#9881; Settings</button>
+            <button id="refresh-scan-btn">&#8635; Refresh Scan</button>
         </div>
 
         <header>
@@ -1462,14 +1368,9 @@ const reportTemplate = `<!DOCTYPE html>
         // Initial portfolio recalculation (scale if existing positions already exceed 100%)
         recalcPortfolio();
 
-        // ===== Hamburger menu and settings dialog =====
+        // ===== Hamburger menu =====
         var hamburgerBtn = document.getElementById('hamburger-btn');
         var menuDropdown = document.getElementById('menu-dropdown');
-        var openSettingsBtn = document.getElementById('open-settings');
-        var settingsOverlay = document.getElementById('settings-overlay');
-        var settingsSave = document.getElementById('settings-save');
-        var settingsCancel = document.getElementById('settings-cancel');
-        var settingsStatus = document.getElementById('settings-status');
 
         if (hamburgerBtn) {
             hamburgerBtn.addEventListener('click', function(e) {
@@ -1485,107 +1386,38 @@ const reportTemplate = `<!DOCTYPE html>
             }
         });
 
-        if (openSettingsBtn) {
-            openSettingsBtn.addEventListener('click', function() {
+        // Refresh scan button
+        var refreshScanBtn = document.getElementById('refresh-scan-btn');
+        if (refreshScanBtn) {
+            refreshScanBtn.addEventListener('click', function() {
                 menuDropdown.classList.remove('visible');
-                settingsOverlay.classList.add('visible');
+                showScanToast('Starting scan...');
+                fetch('/api/kalshi/refresh', { method: 'POST' })
+                    .then(function(r) { return r.json(); })
+                    .then(function() {
+                        showScanToast('Scan started. Page will reload shortly...');
+                        setTimeout(function() { location.reload(); }, 8000);
+                    })
+                    .catch(function() {
+                        showScanToast('Failed to start scan.');
+                    });
             });
         }
 
-        if (settingsCancel) {
-            settingsCancel.addEventListener('click', function() {
-                settingsOverlay.classList.remove('visible');
-            });
+        // Toast notification helper
+        function showScanToast(msg) {
+            var existing = document.querySelector('.scan-toast');
+            if (existing) existing.remove();
+            var toast = document.createElement('div');
+            toast.className = 'scan-toast';
+            toast.textContent = msg;
+            document.body.appendChild(toast);
+            requestAnimationFrame(function() { toast.classList.add('visible'); });
+            setTimeout(function() {
+                toast.classList.remove('visible');
+                setTimeout(function() { toast.remove(); }, 300);
+            }, 4000);
         }
-
-        // Close overlay on background click
-        if (settingsOverlay) {
-            settingsOverlay.addEventListener('click', function(e) {
-                if (e.target === settingsOverlay) {
-                    settingsOverlay.classList.remove('visible');
-                }
-            });
-        }
-
-        if (settingsSave) {
-            settingsSave.addEventListener('click', function() {
-                var checkboxes = document.querySelectorAll('#category-list input[type="checkbox"]');
-                var selected = [];
-                checkboxes.forEach(function(cb) {
-                    if (cb.checked) selected.push(cb.value);
-                });
-
-                if (selected.length === 0) {
-                    alert('Please select at least one category.');
-                    return;
-                }
-
-                // Try to save to server (when served by kalshi-serve)
-                settingsStatus.style.display = 'block';
-                settingsStatus.textContent = 'Saving settings...';
-
-                fetch('/api/config', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ categories: selected })
-                }).then(function(resp) {
-                    if (!resp.ok) throw new Error('Save failed');
-                    settingsStatus.textContent = 'Settings saved! Starting scan...';
-                    // Trigger refresh
-                    return fetch('/api/refresh', { method: 'POST' });
-                }).then(function(resp) {
-                    if (!resp.ok) throw new Error('Refresh failed');
-                    settingsStatus.textContent = 'Scan started. Page will reload when ready...';
-                    // Poll for new report
-                    setTimeout(function() { location.reload(); }, 5000);
-                }).catch(function(err) {
-                    // If not served by kalshi-serve, save to localStorage instead
-                    localStorage.setItem('kalshi-categories', JSON.stringify(selected));
-                    settingsStatus.textContent = 'Saved to browser. Run scanner with updated categories to apply.';
-                    settingsStatus.style.color = 'var(--warning)';
-
-                    // Apply client-side filtering immediately
-                    filterMarketsByCategory(selected);
-                    setTimeout(function() {
-                        settingsOverlay.classList.remove('visible');
-                        settingsStatus.style.display = 'none';
-                        settingsStatus.style.color = 'var(--success)';
-                    }, 2000);
-                });
-            });
-        }
-
-        // Client-side category filtering
-        function filterMarketsByCategory(categories) {
-            var rows = document.querySelectorAll('#markets-table tbody tr');
-            rows.forEach(function(row) {
-                var cat = row.dataset.category || '';
-                if (categories.length === 0 || categories.indexOf(cat) !== -1 || cat === '') {
-                    row.style.display = '';
-                } else {
-                    row.style.display = 'none';
-                    // Uncheck hidden rows
-                    var cb = row.querySelector('.market-select');
-                    if (cb && cb.checked) {
-                        cb.checked = false;
-                        removeFromPortfolio(cb.dataset.ticker, cb.dataset.side);
-                    }
-                }
-            });
-        }
-
-        // Apply saved category filter from localStorage on page load
-        (function() {
-            var saved = localStorage.getItem('kalshi-categories');
-            if (saved) {
-                try {
-                    var cats = JSON.parse(saved);
-                    if (Array.isArray(cats) && cats.length > 0) {
-                        filterMarketsByCategory(cats);
-                    }
-                } catch(e) {}
-            }
-        })();
     })();
     </script>
 </body>

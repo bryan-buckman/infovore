@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Infovore - Settings</title>
+    <link rel="stylesheet" href="/static/css/theme.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script>(function(){var t=localStorage.getItem('theme');if(t)document.documentElement.dataset.theme=t;})();</script>
+    <style>
+        *,
+        *::before,
+        *::after {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            line-height: 1.6;
+            min-height: 100vh;
+        }
+
+        .settings-container {
+            max-width: 700px;
+            margin: 0 auto;
+            padding: 24px 16px 48px;
+        }
+
+        /* ---- Header ---- */
+        .settings-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 32px;
+        }
+
+        .back-link {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 36px;
+            height: 36px;
+            border-radius: var(--radius);
+            border: 1px solid var(--border);
+            background: var(--card-bg);
+            color: var(--text);
+            text-decoration: none;
+            font-size: 18px;
+            transition: background 0.15s, border-color 0.15s;
+            flex-shrink: 0;
+        }
+
+        .back-link:hover {
+            background: var(--bg-hover);
+            border-color: var(--primary);
+        }
+
+        .settings-header h1 {
+            font-size: 1.5rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+        }
+
+        /* ---- Cards ---- */
+        .settings-card {
+            background: var(--card-bg);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 24px;
+            margin-bottom: 20px;
+            box-shadow: var(--shadow-sm);
+        }
+
+        .settings-card h2 {
+            font-size: 1.05rem;
+            font-weight: 600;
+            margin-bottom: 20px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid var(--border);
+            letter-spacing: -0.01em;
+        }
+
+        /* ---- Form elements ---- */
+        .form-group {
+            margin-bottom: 18px;
+        }
+
+        .form-group:last-child {
+            margin-bottom: 0;
+        }
+
+        .form-group label {
+            display: block;
+            font-size: 0.875rem;
+            font-weight: 500;
+            margin-bottom: 6px;
+            color: var(--text);
+        }
+
+        .form-group input[type="text"],
+        .form-group input[type="number"],
+        .form-group input[type="url"],
+        .form-group textarea {
+            width: 100%;
+            padding: 8px 12px;
+            font-size: 0.875rem;
+            font-family: inherit;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            background: var(--bg-input);
+            color: var(--text);
+            transition: border-color 0.15s, box-shadow 0.15s;
+        }
+
+        .form-group input[type="text"]:focus,
+        .form-group input[type="number"]:focus,
+        .form-group input[type="url"]:focus,
+        .form-group textarea:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+        }
+
+        .form-group textarea {
+            min-height: 100px;
+            resize: vertical;
+            font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+            font-size: 0.8125rem;
+        }
+
+        .form-group input[type="file"] {
+            font-size: 0.875rem;
+            color: var(--text-muted);
+        }
+
+        .form-group input[type="file"]::file-selector-button {
+            padding: 6px 12px;
+            font-size: 0.8125rem;
+            font-family: inherit;
+            font-weight: 500;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            background: var(--bg-hover);
+            color: var(--text);
+            cursor: pointer;
+            margin-right: 8px;
+            transition: background 0.15s;
+        }
+
+        .form-group input[type="file"]::file-selector-button:hover {
+            background: var(--border);
+        }
+
+        .form-hint {
+            display: block;
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            margin-top: 4px;
+        }
+
+        .inline-group {
+            display: flex;
+            align-items: flex-end;
+            gap: 8px;
+        }
+
+        .inline-group .form-group {
+            flex: 1;
+            margin-bottom: 0;
+        }
+
+        .inline-group .btn {
+            flex-shrink: 0;
+            margin-bottom: 0;
+        }
+
+        /* Checkboxes container */
+        .checkbox-group {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            padding: 8px 0;
+        }
+
+        .checkbox-group label {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 0.8125rem;
+            font-weight: 400;
+            padding: 4px 10px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            background: var(--bg-input);
+            cursor: pointer;
+            transition: background 0.15s, border-color 0.15s;
+            margin-bottom: 0;
+        }
+
+        .checkbox-group label:hover {
+            background: var(--bg-hover);
+        }
+
+        .checkbox-group input[type="checkbox"] {
+            accent-color: var(--primary);
+        }
+
+        /* ---- Buttons ---- */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            padding: 8px 16px;
+            font-size: 0.875rem;
+            font-family: inherit;
+            font-weight: 500;
+            border: 1px solid transparent;
+            border-radius: var(--radius);
+            cursor: pointer;
+            transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
+            text-decoration: none;
+            line-height: 1.4;
+        }
+
+        .btn-primary {
+            background: var(--primary);
+            color: var(--text-on-primary);
+            border-color: var(--primary);
+        }
+
+        .btn-primary:hover {
+            background: var(--primary-dark);
+            border-color: var(--primary-dark);
+        }
+
+        .btn-secondary {
+            background: var(--card-bg);
+            color: var(--text);
+            border-color: var(--border);
+        }
+
+        .btn-secondary:hover {
+            background: var(--bg-hover);
+            border-color: var(--primary);
+        }
+
+        .btn-danger {
+            background: var(--danger);
+            color: #fff;
+            border-color: var(--danger);
+        }
+
+        .btn-danger:hover {
+            opacity: 0.9;
+        }
+
+        .btn-sm {
+            padding: 6px 12px;
+            font-size: 0.8125rem;
+        }
+
+        /* Button rows */
+        .btn-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        /* Section-level save */
+        .card-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+            margin-top: 20px;
+            padding-top: 16px;
+            border-top: 1px solid var(--border);
+        }
+
+        /* ---- Separator inside card ---- */
+        .form-separator {
+            border: none;
+            border-top: 1px solid var(--border);
+            margin: 18px 0;
+        }
+
+        /* ---- Status / toast feedback ---- */
+        .status-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            font-size: 0.75rem;
+            font-weight: 500;
+            border-radius: 999px;
+        }
+
+        .status-badge.success {
+            background: color-mix(in srgb, var(--success) 15%, transparent);
+            color: var(--success);
+        }
+
+        .status-badge.error {
+            background: color-mix(in srgb, var(--danger) 15%, transparent);
+            color: var(--danger);
+        }
+
+        /* ---- Responsive ---- */
+        @media (max-width: 480px) {
+            .settings-container {
+                padding: 16px 12px 40px;
+            }
+
+            .settings-card {
+                padding: 16px;
+            }
+
+            .inline-group {
+                flex-direction: column;
+                align-items: stretch;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="settings-container">
+
+        <!-- Header -->
+        <div class="settings-header">
+            <a href="/" class="back-link" aria-label="Back to app">&larr;</a>
+            <h1>Settings</h1>
+        </div>
+
+        <!-- ================================================
+             RSS Reader Settings
+             ================================================ -->
+        <section class="settings-card" id="rssSection">
+            <h2>RSS Reader</h2>
+
+            <div class="form-group">
+                <label for="pollingInterval">Polling Interval (minutes)</label>
+                <input type="number" id="pollingInterval" min="15" value="" placeholder="30">
+            </div>
+
+            <hr class="form-separator">
+
+            <div class="form-group">
+                <label for="opmlFile">Import OPML</label>
+                <div class="inline-group">
+                    <div class="form-group">
+                        <input type="file" id="opmlFile" accept=".opml,.xml">
+                    </div>
+                    <button class="btn btn-secondary btn-sm" id="importBtn">Import</button>
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>Export OPML</label>
+                <a href="/api/export-opml" class="btn btn-secondary btn-sm" download>Export OPML</a>
+            </div>
+
+            <hr class="form-separator">
+
+            <div class="form-group">
+                <label>Maintenance</label>
+                <button class="btn btn-danger btn-sm" id="cleanupBtn">Delete Read Items</button>
+            </div>
+
+            <div class="card-actions">
+                <button class="btn btn-primary btn-sm" id="saveRssBtn">Save RSS Settings</button>
+            </div>
+        </section>
+
+        <!-- ================================================
+             Kalshi Markets Settings
+             ================================================ -->
+        <section class="settings-card" id="kalshiSection">
+            <h2>Kalshi Markets</h2>
+
+            <div class="form-group">
+                <label for="kalshiApiKeyId">API Key ID</label>
+                <input type="text" id="kalshiApiKeyId" placeholder="Enter your Kalshi API key ID">
+            </div>
+
+            <div class="form-group">
+                <label for="kalshiPrivateKey">Private Key</label>
+                <textarea id="kalshiPrivateKey" placeholder="Paste your Ed25519 private key here..."></textarea>
+                <span class="form-hint">Write-only -- never displayed after saving</span>
+            </div>
+
+            <hr class="form-separator">
+
+            <div class="form-group">
+                <label>Categories</label>
+                <div class="checkbox-group" id="kalshiCategories">
+                    <!-- Populated by settings.js -->
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label for="kalshiScanInterval">Scan Interval (hours)</label>
+                <input type="number" id="kalshiScanInterval" min="1" value="" placeholder="6">
+            </div>
+
+            <hr class="form-separator">
+
+            <div class="form-group">
+                <label>Actions</label>
+                <div class="btn-row">
+                    <button class="btn btn-secondary btn-sm" id="testKalshiBtn">Test Connection</button>
+                    <button class="btn btn-secondary btn-sm" id="triggerScanBtn">Trigger Scan</button>
+                </div>
+            </div>
+
+            <div class="card-actions">
+                <button class="btn btn-primary btn-sm" id="saveKalshiBtn">Save Kalshi Settings</button>
+            </div>
+        </section>
+
+        <!-- ================================================
+             Database Settings
+             ================================================ -->
+        <section class="settings-card" id="databaseSection">
+            <h2>Database</h2>
+
+            <div class="form-group">
+                <label for="dbUrlInput">Database URL</label>
+                <input type="text" id="dbUrlInput" placeholder="postgres://user:pass@host:5432/dbname">
+                <span class="form-hint">Changes require application restart</span>
+            </div>
+
+            <div class="card-actions">
+                <button class="btn btn-primary btn-sm" id="saveDbBtn">Save Database URL</button>
+            </div>
+        </section>
+
+    </div>
+
+    <!-- Toast notification -->
+    <div id="toast" style="position:fixed;bottom:24px;right:24px;background:var(--card-bg);border:1px solid var(--border);border-radius:var(--radius);padding:12px 20px;font-size:0.875rem;color:var(--text);box-shadow:var(--shadow-md);z-index:1000;opacity:0;transform:translateY(12px);pointer-events:none;transition:opacity 0.25s,transform 0.25s;">
+        <span id="toastMessage"></span>
+    </div>
+    <style>.settings-container #toast.visible{opacity:1;transform:translateY(0);pointer-events:auto;}</style>
+    <script src="/static/js/settings.js"></script>
+</body>
+
+</html>

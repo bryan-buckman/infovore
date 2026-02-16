@@ -1,12 +1,8 @@
 // Infovore App JS
 (function () {
-    const settingsModal = document.getElementById('settingsModal');
     const menuBtn = document.getElementById('menuBtn');
-    const closeSettings = document.getElementById('closeSettings');
-    const saveSettings = document.getElementById('saveSettings');
+    const readerMenuDropdown = document.getElementById('readerMenuDropdown');
     const refreshBtn = document.getElementById('refreshBtn');
-    const importBtn = document.getElementById('importBtn');
-    const cleanupBtn = document.getElementById('cleanupBtn');
     const toast = document.getElementById('toast');
     const toastMessage = document.getElementById('toastMessage');
     const toastProgress = document.getElementById('toastProgress');
@@ -47,6 +43,20 @@
 
     // Sidebar toggle (mobile)
     if (sidebarToggle) sidebarToggle.onclick = () => sidebar.classList.toggle('open');
+
+    // Hamburger menu toggle
+    if (menuBtn && readerMenuDropdown) {
+        menuBtn.onclick = (e) => {
+            e.stopPropagation();
+            const isVisible = readerMenuDropdown.style.display === 'block';
+            readerMenuDropdown.style.display = isVisible ? 'none' : 'block';
+        };
+        document.addEventListener('click', (e) => {
+            if (!readerMenuDropdown.contains(e.target) && e.target !== menuBtn) {
+                readerMenuDropdown.style.display = 'none';
+            }
+        });
+    }
 
     // Collapsible folders - use arrow click area only, not the whole link
     const FOLDER_STATE_KEY = 'infovore_folder_state';
@@ -232,7 +242,7 @@
                     const res = await fetch(`/api/folder/${folderId}`, { method: 'DELETE' });
                     if (res.ok) {
                         showToast('Folder deleted');
-                        setTimeout(() => location.href = '/', 1000);
+                        setTimeout(() => location.href = '/reader', 1000);
                     } else {
                         const data = await res.json();
                         showToast(data.error || 'Failed to delete folder');
@@ -243,11 +253,6 @@
             }
         };
     }
-
-    // Settings modal
-    if (menuBtn) menuBtn.onclick = () => settingsModal.classList.add('active');
-    if (closeSettings) closeSettings.onclick = () => settingsModal.classList.remove('active');
-    settingsModal?.addEventListener('click', e => { if (e.target === settingsModal) settingsModal.classList.remove('active'); });
 
     // Add Feed modal helpers
     function openAddFeedModal(folderId = null) {
@@ -261,10 +266,9 @@
         addFeedModal?.classList.remove('active');
     }
 
-    // Add Feed from settings menu (no folder)
+    // Add Feed from sidebar button (no folder)
     if (addFeedSettingsBtn) {
         addFeedSettingsBtn.onclick = () => {
-            settingsModal?.classList.remove('active');
             openAddFeedModal(null);
         };
     }
@@ -335,10 +339,9 @@
         addFolderModal?.classList.remove('active');
     }
 
-    // Add Folder from settings menu
+    // Add Folder from sidebar button
     if (addFolderSettingsBtn) {
         addFolderSettingsBtn.onclick = () => {
-            settingsModal?.classList.remove('active');
             openAddFolderModal();
         };
     }
@@ -383,56 +386,6 @@
         if (e.key === 'Enter') submitAddFolder?.click();
     });
 
-    // Database settings
-    const dbUrlInput = document.getElementById('dbUrlInput');
-    const saveDbBtn = document.getElementById('saveDbBtn');
-
-    // Load current database URL when settings modal opens
-    if (menuBtn && dbUrlInput) {
-        menuBtn.addEventListener('click', async () => {
-            try {
-                const res = await fetch('/api/database-settings');
-                if (res.ok) {
-                    const data = await res.json();
-                    dbUrlInput.value = data.db_url || '';
-                }
-            } catch (e) {
-                console.error('Failed to load database settings:', e);
-            }
-        });
-    }
-
-    // Save database URL
-    if (saveDbBtn) {
-        saveDbBtn.onclick = async () => {
-            const dbUrl = dbUrlInput?.value?.trim() || '';
-
-            // Validate URL format if provided
-            if (dbUrl && !dbUrl.startsWith('postgres://') && !dbUrl.startsWith('postgresql://') && !dbUrl.startsWith('sqlite://')) {
-                showToast('Invalid URL. Use postgres://... or sqlite://... or leave empty for default SQLite');
-                return;
-            }
-
-            showToast('Saving database settings...');
-
-            try {
-                const res = await fetch('/api/database-settings', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ db_url: dbUrl })
-                });
-                const data = await res.json();
-                if (res.ok) {
-                    showToast('Database settings saved. Restart to apply changes.', 5000);
-                } else {
-                    showToast(data.error || 'Failed to save database settings');
-                }
-            } catch (e) {
-                showToast('Error saving database settings');
-            }
-        };
-    }
-
     // Toast helper
     function showToast(msg, duration = 3000) {
         toastMessage.textContent = msg;
@@ -441,21 +394,6 @@
         setTimeout(() => { toastProgress.style.width = '0%'; }, 50);
         setTimeout(() => { toast.classList.remove('active'); }, duration);
     }
-
-    // Save settings
-    if (saveSettings) saveSettings.onclick = async () => {
-        const interval = parseInt(document.getElementById('pollingInterval').value, 10);
-        showToast('Saving settings...');
-        try {
-            const res = await fetch('/api/settings', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ polling_interval: interval })
-            });
-            const data = await res.json();
-            showToast(`Saved! Interval: ${data.polling_interval}m`);
-            settingsModal.classList.remove('active');
-        } catch (e) { showToast('Error saving settings'); }
-    };
 
     // Refresh feeds
     if (refreshBtn) refreshBtn.onclick = async () => {
@@ -470,32 +408,6 @@
             showToast('Refresh failed');
             refreshBtn.disabled = false;
         }
-    };
-
-    // Import OPML
-    if (importBtn) importBtn.onclick = async () => {
-        const fileInput = document.getElementById('opmlFile');
-        if (!fileInput.files.length) { showToast('Select a file first'); return; }
-        const formData = new FormData();
-        formData.append('opml', fileInput.files[0]);
-        showToast('Importing...', 15000);
-        try {
-            const res = await fetch('/api/import-opml', { method: 'POST', body: formData });
-            const data = await res.json();
-            showToast(`Imported ${data.imported} of ${data.total} feeds. Click "Update Feeds" to fetch items.`);
-            setTimeout(() => location.reload(), 2000);
-        } catch (e) { showToast('Import failed'); }
-    };
-
-    // Cleanup
-    if (cleanupBtn) cleanupBtn.onclick = async () => {
-        showToast('Cleaning up...', 5000);
-        try {
-            const res = await fetch('/api/cleanup', { method: 'POST' });
-            const data = await res.json();
-            showToast(`Deleted ${data.deleted} items`);
-            setTimeout(() => location.reload(), 1500);
-        } catch (e) { showToast('Cleanup failed'); }
     };
 
     // Expand items on click

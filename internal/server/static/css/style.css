@@ -1,16 +1,15 @@
+/* Token aliases — map old style.css names to unified theme.css tokens.
+ * theme.css provides the actual values; these aliases keep the rest of
+ * this file working without mass-renaming every var() reference. */
 :root {
-  --bg-primary: #0d1117;
-  --bg-secondary: #161b22;
-  --bg-tertiary: #21262d;
-  --text-primary: #f0f6fc;
-  --text-secondary: #8b949e;
-  --accent: #58a6ff;
-  --accent-hover: #79c0ff;
-  --border: #30363d;
-  --danger: #f85149;
-  --success: #3fb950;
-  --radius: 8px;
-  --shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  --bg-primary:    var(--bg);
+  --bg-secondary:  var(--card-bg);
+  --bg-tertiary:   var(--bg-hover);
+  --text-primary:  var(--text);
+  --text-secondary:var(--text-muted);
+  --accent:        var(--primary);
+  --accent-hover:  var(--primary-dark);
+  --shadow:        var(--shadow-lg);
 }
 
 * {
