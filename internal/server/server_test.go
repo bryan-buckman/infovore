@@ -145,6 +145,10 @@ func (m *mockStore) MoveFeedToFolder(feedID int64, folderID *int64) error {
 	m.movedFolderID = folderID
 	return nil
 }
+func (m *mockStore) AddFeedToFolder(feedID, folderID int64) error      { return nil }
+func (m *mockStore) RemoveFeedFromFolder(feedID, folderID int64) error { return nil }
+func (m *mockStore) GetFolderIDsForFeed(feedID int64) ([]int64, error) { return nil, nil }
+func (m *mockStore) GetUnreadCounts() (map[int64]int, error)           { return nil, nil }
 
 // Item operations
 
@@ -203,6 +207,14 @@ func (m *mockStore) AddKalshiScanLog(output, errMsg string) error { return nil }
 
 func (m *mockStore) GetKalshiScanLog(limit int) ([]database.ScanLogEntry, error) {
 	return m.kalshiScanLog, nil
+}
+
+func (m *mockStore) SetKalshiOverride(ticker, side, field string, value float64) error {
+	return nil
+}
+
+func (m *mockStore) GetKalshiOverrides() (map[string]float64, error) {
+	return nil, nil
 }
 
 // --- Test server constructor ---
@@ -860,6 +872,7 @@ func TestAPIRoutes_StatusCodes(t *testing.T) {
 			http.StatusOK,
 		},
 		{http.MethodPost, "/api/settings/test-kalshi", nil, http.StatusBadRequest},
+		{http.MethodGet, "/api/rss/status", nil, http.StatusOK},
 	}
 
 	for _, tc := range tests {
@@ -887,5 +900,53 @@ func TestAPIRoutes_StatusCodes(t *testing.T) {
 					tc.method, tc.path, rr.Code, tc.want, rr.Body.String())
 			}
 		})
+	}
+}
+
+// TestRSSRefreshAndStatus tests the async RSS refresh + status polling flow.
+func TestRSSRefreshAndStatus(t *testing.T) {
+	db := newMockStore()
+	db.allFeeds = []model.Feed{
+		{ID: 1, Title: "Feed1", URL: "https://example.com/feed1.xml"},
+	}
+	s := newTestServer(t, db)
+
+	// Status should initially show not refreshing
+	rr := get(t, s, "/api/rss/status")
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET /api/rss/status: got %d, want %d", rr.Code, http.StatusOK)
+	}
+	var status struct {
+		Refreshing bool `json:"refreshing"`
+		FeedsDone  int  `json:"feeds_done"`
+		FeedsTotal int  `json:"feeds_total"`
+	}
+	json.Unmarshal(rr.Body.Bytes(), &status)
+	if status.Refreshing {
+		t.Error("expected refreshing=false initially")
+	}
+
+	// Start async refresh
+	rr = post(t, s, "/api/rss/refresh", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("POST /api/rss/refresh: got %d, want %d", rr.Code, http.StatusOK)
+	}
+	var resp map[string]string
+	json.Unmarshal(rr.Body.Bytes(), &resp)
+	if resp["status"] != "started" {
+		t.Errorf("expected status=started, got %q", resp["status"])
+	}
+
+	// Wait for the async refresh to complete (feeds are mocked, should be fast)
+	time.Sleep(500 * time.Millisecond)
+
+	// Status should now show not refreshing with feed counts populated
+	rr = get(t, s, "/api/rss/status")
+	json.Unmarshal(rr.Body.Bytes(), &status)
+	if status.Refreshing {
+		t.Error("expected refreshing=false after completion")
+	}
+	if status.FeedsTotal != 1 {
+		t.Errorf("expected feeds_total=1, got %d", status.FeedsTotal)
 	}
 }

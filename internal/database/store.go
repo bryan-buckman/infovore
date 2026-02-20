@@ -48,11 +48,15 @@ type Store interface {
 	GetFeedByID(feedID int64) (*model.Feed, error)
 	DeleteFeed(feedID int64) error
 	MoveFeedToFolder(feedID int64, folderID *int64) error
+	AddFeedToFolder(feedID, folderID int64) error
+	RemoveFeedFromFolder(feedID, folderID int64) error
+	GetFolderIDsForFeed(feedID int64) ([]int64, error)
 
 	// Item operations
 	AddItem(item *model.Item) (int64, bool, error)
 	GetItems(feedID int64, onlyUnread bool) ([]model.Item, error)
 	GetAllItems(onlyUnread bool) ([]model.Item, error)
+	GetUnreadCounts() (map[int64]int, error)
 	GetItemsByFolderID(folderID int64, onlyUnread bool) ([]model.Item, error)
 	MarkItemRead(itemID int64) error
 	MarkItemsRead(itemIDs []int64) error
@@ -69,4 +73,6 @@ type Store interface {
 	GetLatestKalshiReport() (html string, generatedAt time.Time, err error)
 	AddKalshiScanLog(output, errMsg string) error
 	GetKalshiScanLog(limit int) ([]ScanLogEntry, error)
+	SetKalshiOverride(ticker, side, field string, value float64) error
+	GetKalshiOverrides() (map[string]float64, error)
 }

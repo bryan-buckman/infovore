@@ -9,15 +9,15 @@
     <link rel="stylesheet" href="/static/css/style.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <script>
-    // FOUC prevention
-    (function(){var t=localStorage.getItem('theme');if(t)document.documentElement.dataset.theme=t;})();
-    // Theme propagation from parent shell iframe
-    window.addEventListener('message',function(e){
-        if(e.data&&e.data.type==='theme-changed'){
-            document.documentElement.dataset.theme=e.data.value;
-            localStorage.setItem('theme',e.data.value);
-        }
-    });
+        // FOUC prevention
+        (function () { var t = localStorage.getItem('theme'); if (t) document.documentElement.dataset.theme = t; })();
+        // Theme propagation from parent shell iframe
+        window.addEventListener('message', function (e) {
+            if (e.data && e.data.type === 'theme-changed') {
+                document.documentElement.dataset.theme = e.data.value;
+                localStorage.setItem('theme', e.data.value);
+            }
+        });
     </script>
 </head>
 
@@ -26,7 +26,6 @@
         <aside class="sidebar" id="sidebar">
             <div class="sidebar-header">
                 <h1 class="logo">Infovore</h1>
-                <button class="menu-btn" id="menuBtn" aria-label="Menu">&#9776;</button>
             </div>
             <div class="sidebar-actions">
                 <button class="btn btn-ghost btn-sm" id="addFeedSettingsBtn">+ Add Feed</button>
@@ -34,23 +33,27 @@
                 <button class="btn btn-ghost btn-sm" id="refreshBtn">Update Feeds</button>
             </div>
             <nav class="sidebar-nav">
-                <a href="/reader" class="nav-item {{if and (not .CurrentFeedID) (not .CurrentFolderID)}}active{{end}}">All
+                <a href="/reader"
+                    class="nav-item {{if and (not .CurrentFeedID) (not .CurrentFolderID)}}active{{end}}">All
                     Items</a>
                 {{range .FoldersWithFeeds}}
                 <div class="folder" data-folder-id="{{.ID}}">
                     <a href="/reader/folder/{{.ID}}" class="folder-toggle {{if eq $.CurrentFolderID .ID}}active{{end}}"
-                        data-folder-id="{{.ID}}">{{.Name}}</a>
+                        data-folder-id="{{.ID}}">{{.Name}}{{if gt .UnreadCount 0}} <span
+                            class="unread-badge">{{.UnreadCount}}</span>{{end}}</a>
                     <div class="folder-feeds drop-zone" id="folder-{{.ID}}" data-folder-id="{{.ID}}">
                         {{range .Feeds}}<a href="/reader/feed/{{.ID}}"
                             class="nav-item feed-item {{if eq $.CurrentFeedID .ID}}active{{end}}{{if .LastError}} feed-error{{end}}"
-                            data-feed-id="{{.ID}}" draggable="true">{{.Title}}</a>{{end}}
+                            data-feed-id="{{.ID}}" draggable="true">{{.Title}}{{if gt .UnreadCount 0}} <span
+                                class="unread-badge">{{.UnreadCount}}</span>{{end}}</a>{{end}}
                     </div>
                 </div>
                 {{end}}
                 <div class="unfiled-feeds drop-zone" data-folder-id="0">
                     {{range .UnfiledFeeds}}<a href="/reader/feed/{{.ID}}"
                         class="nav-item feed-item {{if eq $.CurrentFeedID .ID}}active{{end}}{{if .LastError}} feed-error{{end}}"
-                        data-feed-id="{{.ID}}" draggable="true">{{.Title}}</a>{{end}}
+                        data-feed-id="{{.ID}}" draggable="true">{{.Title}}{{if gt .UnreadCount 0}} <span
+                            class="unread-badge">{{.UnreadCount}}</span>{{end}}</a>{{end}}
                 </div>
             </nav>
         </aside>
@@ -75,15 +78,13 @@
             </div>
         </main>
     </div>
-    <!-- Hamburger menu dropdown -->
-    <div class="menu-dropdown" id="readerMenuDropdown" style="display:none;position:fixed;top:48px;left:16px;min-width:180px;background:var(--card-bg);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow-md);z-index:200;overflow:hidden;">
-        <button class="context-menu-item" onclick="window.top.location.href='/settings'">Settings</button>
-    </div>
+
     <div class="toast" id="toast"><span class="toast-icon"></span><span id="toastMessage">Processing...</span>
         <div class="toast-progress" id="toastProgress"></div>
     </div>
     <div class="context-menu" id="feedContextMenu">
         <button class="context-menu-item" id="updateFeedBtn">Update Feed</button>
+        <button class="context-menu-item" id="addToFoldersBtn">Add to Folders...</button>
         <button class="context-menu-item" id="deleteFeedBtn">Remove Feed</button>
     </div>
     <div class="context-menu" id="folderContextMenu">
@@ -128,6 +129,22 @@
                         placeholder="My Folder"></div>
             </div>
             <div class="modal-footer"><button class="btn btn-primary" id="submitAddFolder">Create Folder</button></div>
+        </div>
+    </div>
+    <div class="modal-overlay" id="folderPickerModal">
+        <div class="modal">
+            <div class="modal-header">
+                <h2>Add Feed to Folders</h2><button class="modal-close" id="closeFolderPicker">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p style="margin-bottom:0.75rem;color:var(--text-muted);font-size:0.85rem;">Select folders for this
+                    feed:</p>
+                <div id="folderCheckboxes" style="max-height:300px;overflow-y:auto;"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="folderPickerCancel">Cancel</button>
+                <button class="btn btn-primary" id="folderPickerSave">Save</button>
+            </div>
         </div>
     </div>
     <script src="/static/js/app.js"></script>

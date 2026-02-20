@@ -3,25 +3,25 @@
     'use strict';
 
     // ----- DOM References -----
-    var pollingInterval   = document.getElementById('pollingInterval');
-    var opmlFile          = document.getElementById('opmlFile');
-    var importBtn         = document.getElementById('importBtn');
-    var cleanupBtn        = document.getElementById('cleanupBtn');
+    var pollingInterval = document.getElementById('pollingInterval');
+    var opmlFile = document.getElementById('opmlFile');
+    var importBtn = document.getElementById('importBtn');
+    var cleanupBtn = document.getElementById('cleanupBtn');
 
-    var kalshiApiKeyId    = document.getElementById('kalshiApiKeyId');
-    var kalshiPrivateKey  = document.getElementById('kalshiPrivateKey');
-    var kalshiCategories  = document.getElementById('kalshiCategories');
+    var kalshiApiKeyId = document.getElementById('kalshiApiKeyId');
+    var kalshiPrivateKey = document.getElementById('kalshiPrivateKey');
+    var kalshiCategories = document.getElementById('kalshiCategories');
     var kalshiScanInterval = document.getElementById('kalshiScanInterval');
-    var testKalshiBtn     = document.getElementById('testKalshiBtn');
-    var triggerScanBtn    = document.getElementById('triggerScanBtn');
+    var testKalshiBtn = document.getElementById('testKalshiBtn');
+    var triggerScanBtn = document.getElementById('triggerScanBtn');
 
-    var dbUrlInput        = document.getElementById('dbUrlInput');
-    var saveDbBtn         = document.getElementById('saveDbBtn');
+    var dbUrlInput = document.getElementById('dbUrlInput');
+    var saveDbBtn = document.getElementById('saveDbBtn');
 
-    var saveRssBtn        = document.getElementById('saveRssBtn');
-    var saveKalshiBtn     = document.getElementById('saveKalshiBtn');
-    var toast             = document.getElementById('toast');
-    var toastMessage      = document.getElementById('toastMessage');
+    var saveRssBtn = document.getElementById('saveRssBtn');
+    var saveKalshiBtn = document.getElementById('saveKalshiBtn');
+    var toast = document.getElementById('toast');
+    var toastMessage = document.getElementById('toastMessage');
 
     // ----- Constants -----
     var ALL_CATEGORIES = [
@@ -43,6 +43,7 @@
 
     // Track whether the user has touched the private key field
     var privateKeyDirty = false;
+    var dbUrlDirty = false;
 
     // ----- Toast Helper -----
     function showToast(msg, duration) {
@@ -137,8 +138,14 @@
 
                 renderCategories(data.kalshi_categories || '');
 
-                if (dbUrlInput && data.db_url != null) {
-                    dbUrlInput.value = data.db_url;
+                if (dbUrlInput) {
+                    dbUrlInput.value = '';
+                    dbUrlDirty = false;
+                    if (data.db_url) {
+                        dbUrlInput.placeholder = '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022 (configured)';
+                    } else {
+                        dbUrlInput.placeholder = 'postgres://user:pass@host:5432/dbname';
+                    }
                 }
             })
             .catch(function (err) {
@@ -151,6 +158,11 @@
     if (kalshiPrivateKey) {
         kalshiPrivateKey.addEventListener('input', function () {
             privateKeyDirty = true;
+        });
+    }
+    if (dbUrlInput) {
+        dbUrlInput.addEventListener('input', function () {
+            dbUrlDirty = true;
         });
     }
 
@@ -337,6 +349,11 @@
     // ----- Save Database URL -----
     if (saveDbBtn) {
         saveDbBtn.onclick = async function () {
+            if (!dbUrlDirty) {
+                showToast('No changes to save');
+                return;
+            }
+
             var dbUrl = dbUrlInput ? dbUrlInput.value.trim() : '';
 
             if (dbUrl && !dbUrl.startsWith('postgres://') && !dbUrl.startsWith('postgresql://') && !dbUrl.startsWith('sqlite://')) {
@@ -355,6 +372,11 @@
                 var data = await res.json();
                 if (res.ok) {
                     showToast('Database settings saved. Restart to apply changes.', 5000);
+                    dbUrlDirty = false;
+                    if (dbUrlInput) {
+                        dbUrlInput.value = '';
+                        dbUrlInput.placeholder = '\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022 (configured)';
+                    }
                 } else {
                     showToast(data.error || 'Failed to save database settings');
                 }

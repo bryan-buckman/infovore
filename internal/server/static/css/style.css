@@ -2,14 +2,14 @@
  * theme.css provides the actual values; these aliases keep the rest of
  * this file working without mass-renaming every var() reference. */
 :root {
-  --bg-primary:    var(--bg);
-  --bg-secondary:  var(--card-bg);
-  --bg-tertiary:   var(--bg-hover);
-  --text-primary:  var(--text);
-  --text-secondary:var(--text-muted);
-  --accent:        var(--primary);
-  --accent-hover:  var(--primary-dark);
-  --shadow:        var(--shadow-lg);
+  --bg-primary: var(--bg);
+  --bg-secondary: var(--card-bg);
+  --bg-tertiary: var(--bg-hover);
+  --text-primary: var(--text);
+  --text-secondary: var(--text-muted);
+  --accent: var(--primary);
+  --accent-hover: var(--primary-dark);
+  --shadow: var(--shadow-lg);
 }
 
 * {
@@ -569,6 +569,41 @@ body {
   color: var(--danger);
   font-size: 0.75em;
   font-weight: normal;
+}
+
+.unread-badge {
+  display: inline-block;
+  min-width: 1.1em;
+  padding: 0 0.35em;
+  font-size: 0.65rem;
+  font-weight: 600;
+  line-height: 1.4;
+  text-align: center;
+  background: var(--accent);
+  color: #000;
+  border-radius: 10px;
+  vertical-align: middle;
+  margin-left: 0.25em;
+}
+
+.folder-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.25rem;
+  font-size: 0.9rem;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+}
+
+.folder-checkbox-label:last-child {
+  border-bottom: none;
+}
+
+.folder-checkbox-label input[type="checkbox"] {
+  width: 1rem;
+  height: 1rem;
+  cursor: pointer;
 }
 
 .modal-footer {

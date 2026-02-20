@@ -7,7 +7,7 @@
     <title>Infovore - Settings</title>
     <link rel="stylesheet" href="/static/css/theme.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <script>(function(){var t=localStorage.getItem('theme');if(t)document.documentElement.dataset.theme=t;})();</script>
+    <script>(function () { var t = localStorage.getItem('theme'); if (t) document.documentElement.dataset.theme = t; })();</script>
     <style>
         *,
         *::before,
@@ -105,6 +105,7 @@
         .form-group input[type="text"],
         .form-group input[type="number"],
         .form-group input[type="url"],
+        .form-group input[type="password"],
         .form-group textarea {
             width: 100%;
             padding: 8px 12px;
@@ -120,6 +121,7 @@
         .form-group input[type="text"]:focus,
         .form-group input[type="number"]:focus,
         .form-group input[type="url"]:focus,
+        .form-group input[type="password"]:focus,
         .form-group textarea:focus {
             outline: none;
             border-color: var(--primary);
@@ -430,8 +432,9 @@
 
             <div class="form-group">
                 <label for="dbUrlInput">Database URL</label>
-                <input type="text" id="dbUrlInput" placeholder="postgres://user:pass@host:5432/dbname">
-                <span class="form-hint">Changes require application restart</span>
+                <input type="password" id="dbUrlInput" placeholder="postgres://user:pass@host:5432/dbname">
+                <span class="form-hint">Write-only — never displayed after saving. Changes require application
+                    restart.</span>
             </div>
 
             <div class="card-actions">
@@ -442,10 +445,17 @@
     </div>
 
     <!-- Toast notification -->
-    <div id="toast" style="position:fixed;bottom:24px;right:24px;background:var(--card-bg);border:1px solid var(--border);border-radius:var(--radius);padding:12px 20px;font-size:0.875rem;color:var(--text);box-shadow:var(--shadow-md);z-index:1000;opacity:0;transform:translateY(12px);pointer-events:none;transition:opacity 0.25s,transform 0.25s;">
+    <div id="toast"
+        style="position:fixed;bottom:24px;right:24px;background:var(--card-bg);border:1px solid var(--border);border-radius:var(--radius);padding:12px 20px;font-size:0.875rem;color:var(--text);box-shadow:var(--shadow-md);z-index:1000;opacity:0;transform:translateY(12px);pointer-events:none;transition:opacity 0.25s,transform 0.25s;">
         <span id="toastMessage"></span>
     </div>
-    <style>.settings-container #toast.visible{opacity:1;transform:translateY(0);pointer-events:auto;}</style>
+    <style>
+        .settings-container #toast.visible {
+            opacity: 1;
+            transform: translateY(0);
+            pointer-events: auto;
+        }
+    </style>
     <script src="/static/js/settings.js"></script>
 </body>
 

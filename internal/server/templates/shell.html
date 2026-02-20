@@ -235,6 +235,63 @@
         .shell-toast.error {
             border-left: 3px solid var(--danger);
         }
+
+        /* ---- Progress bar ---- */
+        .progress-bar-container {
+            height: 3px;
+            background: var(--border);
+            overflow: hidden;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+
+        .progress-bar-container.active {
+            opacity: 1;
+        }
+
+        .progress-bar-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--primary), var(--primary-light), var(--primary));
+            width: 0%;
+            transition: width 0.4s ease;
+            border-radius: 0 2px 2px 0;
+        }
+
+        /* Indeterminate animation (for Kalshi scan where we don't know progress %) */
+        .progress-bar-fill.indeterminate {
+            width: 30%;
+            animation: indeterminate 1.5s ease-in-out infinite;
+        }
+
+        @keyframes indeterminate {
+            0% {
+                transform: translateX(-100%);
+            }
+
+            100% {
+                transform: translateX(400%);
+            }
+        }
+
+        .progress-status {
+            height: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            background: var(--card-bg);
+            border-bottom: 1px solid var(--border);
+            opacity: 0;
+            overflow: hidden;
+            max-height: 0;
+            transition: opacity 0.3s, max-height 0.3s;
+        }
+
+        .progress-status.active {
+            opacity: 1;
+            max-height: 24px;
+        }
     </style>
 </head>
 
@@ -253,9 +310,16 @@
             <!-- Hamburger dropdown -->
             <div class="menu-dropdown" id="menuDropdown">
                 <button class="menu-dropdown-item" id="menuSettings">Settings</button>
+                <button class="menu-dropdown-item" id="menuRefreshFeeds">Refresh Feeds</button>
                 <button class="menu-dropdown-item" id="menuRefreshScan">Refresh Scan</button>
             </div>
         </div>
+
+        <!-- Progress bar -->
+        <div class="progress-bar-container" id="progressBar">
+            <div class="progress-bar-fill" id="progressFill"></div>
+        </div>
+        <div class="progress-status" id="progressStatus"></div>
 
         <!-- Single iframe for content -->
         <iframe class="content-frame" id="contentFrame" src="/"></iframe>
@@ -275,8 +339,92 @@
             var menuDropdown = document.getElementById('menuDropdown');
             var menuSettings = document.getElementById('menuSettings');
             var menuRefreshScan = document.getElementById('menuRefreshScan');
+            var menuRefreshFeeds = document.getElementById('menuRefreshFeeds');
             var themeToggle = document.getElementById('themeToggle');
             var toast = document.getElementById('shellToast');
+            var progressBar = document.getElementById('progressBar');
+            var progressFill = document.getElementById('progressFill');
+            var progressStatus = document.getElementById('progressStatus');
+
+            /* ---- Progress bar helpers ---- */
+            var kalshiPollTimer = null;
+            var rssPollTimer = null;
+
+            function showProgress(pct, statusText, indeterminate) {
+                progressBar.classList.add('active');
+                progressStatus.classList.add('active');
+                if (indeterminate) {
+                    progressFill.className = 'progress-bar-fill indeterminate';
+                    progressFill.style.width = '';
+                } else {
+                    progressFill.className = 'progress-bar-fill';
+                    progressFill.style.width = Math.min(100, Math.max(0, pct)) + '%';
+                }
+                if (statusText) progressStatus.textContent = statusText;
+            }
+
+            function hideProgress() {
+                progressBar.classList.remove('active');
+                progressStatus.classList.remove('active');
+                progressFill.className = 'progress-bar-fill';
+                progressFill.style.width = '0%';
+                progressStatus.textContent = '';
+            }
+
+            /* ---- Kalshi scan polling ---- */
+            function startKalshiPoll() {
+                if (kalshiPollTimer) return;
+                showProgress(0, 'Scanning markets...', true);
+                kalshiPollTimer = setInterval(function () {
+                    fetch('/api/kalshi/status').then(function (r) { return r.json(); }).then(function (data) {
+                        if (data.scanning) {
+                            showProgress(0, 'Scanning markets...', true);
+                        } else {
+                            clearInterval(kalshiPollTimer);
+                            kalshiPollTimer = null;
+                            hideProgress();
+                            if (data.last_error) {
+                                showToast('Scan failed: ' + data.last_error, 'error');
+                            } else {
+                                showToast('Scan complete', 'success');
+                                // Reload markets iframe if active
+                                try {
+                                    var currentPath = new URL(frame.src, location.origin).pathname;
+                                    if (currentPath === '/markets') frame.src = '/markets';
+                                } catch (e) { }
+                            }
+                        }
+                    }).catch(function () { });
+                }, 2000);
+            }
+
+            /* ---- RSS refresh polling ---- */
+            function startRSSPoll() {
+                if (rssPollTimer) return;
+                showProgress(0, 'Refreshing feeds...', true);
+                rssPollTimer = setInterval(function () {
+                    fetch('/api/rss/status').then(function (r) { return r.json(); }).then(function (data) {
+                        if (data.refreshing) {
+                            var pct = data.feeds_total > 0 ? Math.round((data.feeds_done / data.feeds_total) * 100) : 0;
+                            showProgress(pct, 'Refreshing feeds: ' + data.feeds_done + '/' + data.feeds_total + ' (' + data.new_items + ' new items)', false);
+                        } else {
+                            clearInterval(rssPollTimer);
+                            rssPollTimer = null;
+                            hideProgress();
+                            if (data.last_error) {
+                                showToast('Refresh failed: ' + data.last_error, 'error');
+                            } else if (data.feeds_total > 0) {
+                                showToast('Refreshed ' + data.feeds_total + ' feeds, ' + data.new_items + ' new items', 'success');
+                                // Reload reader iframe if active
+                                try {
+                                    var currentPath = new URL(frame.src, location.origin).pathname;
+                                    if (currentPath.indexOf('/reader') === 0) frame.src = frame.src;
+                                } catch (e) { }
+                            }
+                        }
+                    }).catch(function () { });
+                }, 2000);
+            }
 
             /* ---- Tab routing ---- */
             var TAB_MAP = {
@@ -316,6 +464,18 @@
                 localStorage.setItem('shell-tab', name);
                 if (pushState) {
                     history.replaceState(null, '', '#' + name);
+                }
+
+                /* Check for in-progress operations on tab switch */
+                if (name === 'markets' && !kalshiPollTimer) {
+                    fetch('/api/kalshi/status').then(function (r) { return r.json(); }).then(function (data) {
+                        if (data.scanning) startKalshiPoll();
+                    }).catch(function () { });
+                }
+                if (name === 'reader' && !rssPollTimer) {
+                    fetch('/api/rss/status').then(function (r) { return r.json(); }).then(function (data) {
+                        if (data.refreshing) startRSSPoll();
+                    }).catch(function () { });
                 }
             }
 
@@ -360,8 +520,10 @@
                     .then(function (res) {
                         if (res.ok) {
                             showToast('Scan started', 'success');
+                            startKalshiPoll();
                         } else if (res.status === 409) {
                             showToast('Scan already in progress', 'error');
+                            startKalshiPoll();
                         } else {
                             showToast('Failed to start scan', 'error');
                         }
@@ -369,6 +531,32 @@
                     .catch(function () {
                         showToast('Network error', 'error');
                     });
+            });
+
+            menuRefreshFeeds.addEventListener('click', function () {
+                menuDropdown.classList.remove('open');
+                fetch('/api/rss/refresh', { method: 'POST' })
+                    .then(function (res) {
+                        if (res.ok) {
+                            showToast('Feed refresh started', 'success');
+                            startRSSPoll();
+                        } else if (res.status === 409) {
+                            showToast('Feed refresh already running', 'error');
+                            startRSSPoll();
+                        } else {
+                            showToast('Failed to start refresh', 'error');
+                        }
+                    })
+                    .catch(function () {
+                        showToast('Network error', 'error');
+                    });
+            });
+
+            /* ---- Listen for messages from iframes ---- */
+            window.addEventListener('message', function (e) {
+                if (e.data && e.data.type === 'rss-refresh-started') {
+                    startRSSPoll();
+                }
             });
 
             /* ---- Theme toggle ---- */

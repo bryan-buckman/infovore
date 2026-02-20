@@ -14,6 +14,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bryan-buckman/infovore/internal/database"
@@ -40,6 +41,15 @@ type Server struct {
 	httpServer *http.Server
 	templates  *template.Template
 	kalshi     *KalshiManager
+
+	// RSS refresh state (for async refresh + progress)
+	rssMu          sync.RWMutex
+	rssRefreshing  bool
+	rssLastRefresh time.Time
+	rssLastError   string
+	rssFeedsDone   int
+	rssFeedsTotal  int
+	rssNewItems    int
 }
 
 // New creates a new server.
@@ -101,6 +111,8 @@ func (s *Server) setupRoutes() {
 		r.Delete("/feed/{feedID}", s.handleDeleteFeed)
 		r.Delete("/folder/{folderID}", s.handleDeleteFolder)
 		r.Post("/feed/{feedID}/move", s.handleMoveFeed)
+		r.Get("/feed/{feedID}/folders", s.handleGetFeedFolders)
+		r.Post("/feed/{feedID}/folders", s.handleSetFeedFolders)
 		r.Post("/feed", s.handleAddFeed)
 		r.Post("/folder", s.handleAddFolder)
 		r.Get("/database-settings", s.handleGetDatabaseSettings)
@@ -110,6 +122,12 @@ func (s *Server) setupRoutes() {
 		r.Get("/kalshi/status", s.kalshi.HandleKalshiStatus)
 		r.Post("/kalshi/refresh", s.kalshi.HandleKalshiRefresh)
 		r.Get("/kalshi/log", s.kalshi.HandleKalshiLog)
+		r.Get("/kalshi/overrides", s.handleGetKalshiOverrides)
+		r.Post("/kalshi/overrides", s.handleSetKalshiOverride)
+
+		// RSS API
+		r.Post("/rss/refresh", s.handleRSSRefreshAsync)
+		r.Get("/rss/status", s.handleRSSStatus)
 	})
 
 	// Kalshi markets page (inside iframe).
@@ -491,6 +509,93 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleRSSRefreshAsync kicks off an async feed refresh and returns immediately.
+func (s *Server) handleRSSRefreshAsync(w http.ResponseWriter, r *http.Request) {
+	s.rssMu.Lock()
+	if s.rssRefreshing {
+		s.rssMu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		json.NewEncoder(w).Encode(map[string]string{"status": "already_running"})
+		return
+	}
+	s.rssRefreshing = true
+	s.rssFeedsDone = 0
+	s.rssFeedsTotal = 0
+	s.rssNewItems = 0
+	s.rssLastError = ""
+	s.rssMu.Unlock()
+
+	go s.runRSSRefresh()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "started"})
+}
+
+// runRSSRefresh fetches all feeds in background using parallel workers and updates progress state.
+func (s *Server) runRSSRefresh() {
+	defer func() {
+		s.rssMu.Lock()
+		s.rssRefreshing = false
+		s.rssLastRefresh = time.Now()
+		s.rssMu.Unlock()
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+
+	log.Printf("[rss] Starting async parallel refresh")
+
+	results, err := s.fetcher.FetchAllWithProgress(ctx, func(done, total, newItems int) {
+		s.rssMu.Lock()
+		s.rssFeedsDone = done
+		s.rssFeedsTotal = total
+		s.rssNewItems = newItems
+		s.rssMu.Unlock()
+	})
+
+	if err != nil {
+		s.rssMu.Lock()
+		s.rssLastError = fmt.Sprintf("refresh error: %v", err)
+		s.rssMu.Unlock()
+		return
+	}
+
+	totalNew := 0
+	for _, c := range results {
+		totalNew += c
+	}
+	s.rssMu.Lock()
+	s.rssNewItems = totalNew
+	s.rssMu.Unlock()
+
+	log.Printf("[rss] Async refresh complete: %d new items from %d feeds", totalNew, len(results))
+}
+
+// handleRSSStatus returns the current RSS refresh status as JSON.
+func (s *Server) handleRSSStatus(w http.ResponseWriter, r *http.Request) {
+	s.rssMu.RLock()
+	status := struct {
+		Refreshing  bool      `json:"refreshing"`
+		LastRefresh time.Time `json:"last_refresh"`
+		LastError   string    `json:"last_error,omitempty"`
+		FeedsDone   int       `json:"feeds_done"`
+		FeedsTotal  int       `json:"feeds_total"`
+		NewItems    int       `json:"new_items"`
+	}{
+		Refreshing:  s.rssRefreshing,
+		LastRefresh: s.rssLastRefresh,
+		LastError:   s.rssLastError,
+		FeedsDone:   s.rssFeedsDone,
+		FeedsTotal:  s.rssFeedsTotal,
+		NewItems:    s.rssNewItems,
+	}
+	s.rssMu.RUnlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(status)
+}
+
 func (s *Server) handleCleanup(w http.ResponseWriter, r *http.Request) {
 	deleted, err := s.db.CleanupReadItems()
 	if err != nil {
@@ -579,6 +684,102 @@ func (s *Server) handleMoveFeed(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleGetFeedFolders returns the folder IDs a feed belongs to and all available folders.
+func (s *Server) handleGetFeedFolders(w http.ResponseWriter, r *http.Request) {
+	feedIDStr := chi.URLParam(r, "feedID")
+	feedID, err := strconv.ParseInt(feedIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid feed ID", http.StatusBadRequest)
+		return
+	}
+
+	folderIDs, err := s.db.GetFolderIDsForFeed(feedID)
+	if err != nil {
+		http.Error(w, "Failed to get folder assignments", http.StatusInternalServerError)
+		return
+	}
+
+	folders, err := s.db.GetFolders()
+	if err != nil {
+		http.Error(w, "Failed to get folders", http.StatusInternalServerError)
+		return
+	}
+
+	type folderInfo struct {
+		ID   int64  `json:"id"`
+		Name string `json:"name"`
+	}
+	var allFolders []folderInfo
+	for _, f := range folders {
+		allFolders = append(allFolders, folderInfo{ID: f.ID, Name: f.Name})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"folder_ids":  folderIDs,
+		"all_folders": allFolders,
+	})
+}
+
+// handleSetFeedFolders sets the additional folder assignments for a feed.
+func (s *Server) handleSetFeedFolders(w http.ResponseWriter, r *http.Request) {
+	feedIDStr := chi.URLParam(r, "feedID")
+	feedID, err := strconv.ParseInt(feedIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "Invalid feed ID", http.StatusBadRequest)
+		return
+	}
+
+	var req struct {
+		FolderIDs []int64 `json:"folder_ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	// Get the feed to know its primary folder
+	feed, err := s.db.GetFeedByID(feedID)
+	if err != nil {
+		http.Error(w, "Feed not found", http.StatusNotFound)
+		return
+	}
+
+	// Build desired additional folder set (exclude primary folder)
+	desiredAdditional := make(map[int64]bool)
+	for _, fid := range req.FolderIDs {
+		if feed.FolderID == nil || fid != *feed.FolderID {
+			desiredAdditional[fid] = true
+		}
+	}
+
+	// Get current additional assignments
+	currentIDs, _ := s.db.GetFolderIDsForFeed(feedID)
+	currentAdditional := make(map[int64]bool)
+	for _, fid := range currentIDs {
+		if feed.FolderID == nil || fid != *feed.FolderID {
+			currentAdditional[fid] = true
+		}
+	}
+
+	// Add new assignments
+	for fid := range desiredAdditional {
+		if !currentAdditional[fid] {
+			s.db.AddFeedToFolder(feedID, fid)
+		}
+	}
+
+	// Remove old assignments
+	for fid := range currentAdditional {
+		if !desiredAdditional[fid] {
+			s.db.RemoveFeedFromFolder(feedID, fid)
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
 func (s *Server) handleRefreshFeed(w http.ResponseWriter, r *http.Request) {
 	feedIDStr := chi.URLParam(r, "feedID")
 	feedID, err := strconv.ParseInt(feedIDStr, 10, 64)
@@ -627,10 +828,11 @@ func (s *Server) handleRefreshFolder(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	total := 0
+refreshLoop:
 	for _, feed := range feeds {
 		select {
 		case <-ctx.Done():
-			break
+			break refreshLoop
 		default:
 		}
 		count, err := s.fetcher.FetchFeed(ctx, feed)
@@ -837,4 +1039,39 @@ func timeAgo(t time.Time) string {
 	default:
 		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
 	}
+}
+
+// handleGetKalshiOverrides returns all user-editable overrides as JSON.
+func (s *Server) handleGetKalshiOverrides(w http.ResponseWriter, r *http.Request) {
+	overrides, err := s.db.GetKalshiOverrides()
+	if err != nil {
+		http.Error(w, "Failed to get overrides", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(overrides)
+}
+
+// handleSetKalshiOverride saves a single override.
+func (s *Server) handleSetKalshiOverride(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Ticker string  `json:"ticker"`
+		Side   string  `json:"side"`
+		Field  string  `json:"field"`
+		Value  float64 `json:"value"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+	if req.Ticker == "" || req.Field == "" {
+		http.Error(w, "ticker and field are required", http.StatusBadRequest)
+		return
+	}
+	if err := s.db.SetKalshiOverride(req.Ticker, req.Side, req.Field, req.Value); err != nil {
+		http.Error(w, "Failed to save override", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }

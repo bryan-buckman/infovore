@@ -20,6 +20,7 @@ type Feed struct {
 	LastFetched time.Time
 	LastError   string // stores last fetch error, empty if successful
 	ItemCount   int    // number of items in feed (for UI warning display)
+	UnreadCount int    // number of unread items (for sidebar badge)
 }
 
 // Item represents a single article/entry from a feed.
@@ -38,7 +39,8 @@ type Item struct {
 // FolderWithFeeds represents a folder containing its feeds for UI rendering.
 type FolderWithFeeds struct {
 	Folder
-	Feeds []Feed
+	Feeds       []Feed
+	UnreadCount int // sum of all feeds' unread counts
 }
 
 // Settings key constants.

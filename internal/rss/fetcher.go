@@ -207,10 +207,19 @@ type FetchResult struct {
 	Error    error
 }
 
+// ProgressFunc is called after each feed completes with (feedsDone, feedsTotal, newItems).
+type ProgressFunc func(done, total, newItems int)
+
 // FetchAll fetches all feeds with configurable concurrency.
 // Uses parallel workers for PostgreSQL, sequential for SQLite.
 // Returns a map of feed ID -> new item count.
 func (f *Fetcher) FetchAll(ctx context.Context) (map[int64]int, error) {
+	return f.FetchAllWithProgress(ctx, nil)
+}
+
+// FetchAllWithProgress fetches all feeds with a progress callback.
+// The callback is invoked after each feed finishes (whether success or error).
+func (f *Fetcher) FetchAllWithProgress(ctx context.Context, progress ProgressFunc) (map[int64]int, error) {
 	feeds, err := f.db.GetAllFeeds()
 	if err != nil {
 		return nil, err
@@ -224,16 +233,17 @@ func (f *Fetcher) FetchAll(ctx context.Context) (map[int64]int, error) {
 
 	// For sequential fetching (SQLite), use simple loop
 	if f.concurrency <= 1 {
-		return f.fetchSequential(ctx, feeds)
+		return f.fetchSequential(ctx, feeds, progress)
 	}
 
 	// For parallel fetching (PostgreSQL), use worker pool
-	return f.fetchParallel(ctx, feeds)
+	return f.fetchParallel(ctx, feeds, progress)
 }
 
 // fetchSequential fetches feeds one at a time (for SQLite).
-func (f *Fetcher) fetchSequential(ctx context.Context, feeds []model.Feed) (map[int64]int, error) {
+func (f *Fetcher) fetchSequential(ctx context.Context, feeds []model.Feed, progress ProgressFunc) (map[int64]int, error) {
 	results := make(map[int64]int)
+	totalNew := 0
 
 	for i, feed := range feeds {
 		select {
@@ -246,9 +256,14 @@ func (f *Fetcher) fetchSequential(ctx context.Context, feeds []model.Feed) (map[
 		count, err := f.FetchFeed(ctx, feed)
 		if err != nil {
 			log.Printf("Failed to fetch %s: %v", feed.URL, err)
-			continue
+		} else {
+			results[feed.ID] = count
+			totalNew += count
 		}
-		results[feed.ID] = count
+
+		if progress != nil {
+			progress(i+1, len(feeds), totalNew)
+		}
 
 		// Progress logging every 50 feeds
 		if (i+1)%50 == 0 {
@@ -260,7 +275,7 @@ func (f *Fetcher) fetchSequential(ctx context.Context, feeds []model.Feed) (map[
 }
 
 // fetchParallel fetches feeds using a worker pool (for PostgreSQL).
-func (f *Fetcher) fetchParallel(ctx context.Context, feeds []model.Feed) (map[int64]int, error) {
+func (f *Fetcher) fetchParallel(ctx context.Context, feeds []model.Feed, progress ProgressFunc) (map[int64]int, error) {
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 
@@ -292,10 +307,11 @@ func (f *Fetcher) fetchParallel(ctx context.Context, feeds []model.Feed) (map[in
 
 	// Send feeds to workers
 	go func() {
+	loop:
 		for _, feed := range feeds {
 			select {
 			case <-ctx.Done():
-				break
+				break loop
 			case feedChan <- feed:
 			}
 		}
@@ -310,18 +326,23 @@ func (f *Fetcher) fetchParallel(ctx context.Context, feeds []model.Feed) (map[in
 
 	// Process results
 	completed := 0
+	totalNew := 0
 	for result := range resultChan {
-		if result.Error != nil {
-			// Error already logged in FetchFeed
-			continue
-		}
-		mu.Lock()
-		results[result.FeedID] = result.NewItems
 		completed++
+		if result.Error == nil {
+			mu.Lock()
+			results[result.FeedID] = result.NewItems
+			totalNew += result.NewItems
+			mu.Unlock()
+		}
+
+		if progress != nil {
+			progress(completed, len(feeds), totalNew)
+		}
+
 		if completed%50 == 0 {
 			log.Printf("Progress: %d/%d feeds fetched", completed, len(feeds))
 		}
-		mu.Unlock()
 	}
 
 	return results, nil

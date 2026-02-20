@@ -19,11 +19,12 @@ import (
 type KalshiManager struct {
 	db database.Store
 
-	mu        sync.RWMutex
-	scanning  bool
-	lastScan  time.Time
-	lastError string
-	stopCh    chan struct{}
+	mu         sync.RWMutex
+	scanning   bool
+	lastScan   time.Time
+	lastError  string
+	lastOutput string // last scan log (kept for status API)
+	stopCh     chan struct{}
 }
 
 // NewKalshiManager creates a new manager and starts the background scheduler.
@@ -144,8 +145,15 @@ func (m *KalshiManager) runScan() {
 	// Save log
 	_ = m.db.AddKalshiScanLog(result.Log, "")
 
+	// Keep last output for the status API (truncate to last 4000 chars)
+	output := result.Log
+	if len(output) > 4000 {
+		output = output[len(output)-4000:]
+	}
+
 	m.mu.Lock()
 	m.lastError = ""
+	m.lastOutput = output
 	m.mu.Unlock()
 
 	log.Printf("[kalshi] Scan complete: %d markets found", result.NumMarkets)
@@ -156,16 +164,30 @@ func (m *KalshiManager) runScan() {
 // HandleKalshiStatus returns the current scan status as JSON.
 func (m *KalshiManager) HandleKalshiStatus(w http.ResponseWriter, r *http.Request) {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
+	scanning := m.scanning
+	lastScan := m.lastScan
+	lastError := m.lastError
+	lastOutput := m.lastOutput
+	m.mu.RUnlock()
+
+	// Check if a report exists in the database
+	reportReady := false
+	if html, _, err := m.db.GetLatestKalshiReport(); err == nil && html != "" {
+		reportReady = true
+	}
 
 	status := struct {
-		Scanning  bool      `json:"scanning"`
-		LastScan  time.Time `json:"last_scan"`
-		LastError string    `json:"last_error,omitempty"`
+		Scanning    bool      `json:"scanning"`
+		LastScan    time.Time `json:"last_scan"`
+		LastError   string    `json:"last_error,omitempty"`
+		LastOutput  string    `json:"last_output,omitempty"`
+		ReportReady bool      `json:"report_ready"`
 	}{
-		Scanning:  m.scanning,
-		LastScan:  m.lastScan,
-		LastError: m.lastError,
+		Scanning:    scanning,
+		LastScan:    lastScan,
+		LastError:   lastError,
+		LastOutput:  lastOutput,
+		ReportReady: reportReady,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

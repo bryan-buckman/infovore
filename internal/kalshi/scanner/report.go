@@ -285,7 +285,7 @@ const reportTemplate = `<!DOCTYPE html>
             padding: 1rem 0;
         }
         /* Portfolio edge input */
-        .portfolio-edge-input {
+        .portfolio-edge-input, .portfolio-price-input, .txn-price-input {
             width: 4.5rem;
             background: #f8fafc;
             border: 1px solid #cbd5e1;
@@ -295,10 +295,13 @@ const reportTemplate = `<!DOCTYPE html>
             font-size: 0.85rem;
             color: var(--text);
         }
-        .portfolio-edge-input:focus {
+        .portfolio-edge-input:focus, .portfolio-price-input:focus, .txn-price-input:focus {
             outline: none;
             border-color: var(--primary);
             box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.2);
+        }
+        [data-theme="dark"] .portfolio-edge-input, [data-theme="dark"] .portfolio-price-input, [data-theme="dark"] .txn-price-input {
+            color: #1e293b;
         }
         .theoretical-row {
             background: #eff6ff !important;
@@ -444,58 +447,7 @@ const reportTemplate = `<!DOCTYPE html>
             color: #94a3b8;
             text-transform: uppercase;
         }
-        /* Hamburger menu */
-        .hamburger-btn {
-            position: fixed;
-            top: 1rem;
-            left: 1rem;
-            z-index: 1000;
-            width: 44px;
-            height: 44px;
-            border: none;
-            background: var(--primary);
-            color: white;
-            font-size: 1.5rem;
-            border-radius: 8px;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
-            transition: background-color 0.2s;
-        }
-        .hamburger-btn:hover {
-            background: var(--primary-dark);
-        }
-        .menu-dropdown {
-            display: none;
-            position: fixed;
-            top: 4rem;
-            left: 1rem;
-            z-index: 1000;
-            background: var(--card-bg);
-            border-radius: 8px;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.15);
-            min-width: 200px;
-            overflow: hidden;
-        }
-        .menu-dropdown.visible {
-            display: block;
-        }
-        .menu-dropdown button {
-            display: block;
-            width: 100%;
-            padding: 0.75rem 1rem;
-            border: none;
-            background: none;
-            text-align: left;
-            font-size: 0.95rem;
-            cursor: pointer;
-            color: var(--text);
-        }
-        .menu-dropdown button:hover {
-            background: var(--bg);
-        }
+        /* Category badge */
         .category-badge {
             display: inline-block;
             padding: 0.15rem 0.5rem;
@@ -547,12 +499,6 @@ const reportTemplate = `<!DOCTYPE html>
 </head>
 <body>
     <div class="container">
-        <!-- Hamburger menu -->
-        <button class="hamburger-btn" id="hamburger-btn" title="Menu">&#9776;</button>
-        <div class="menu-dropdown" id="menu-dropdown">
-            <button onclick="window.top.location.href='/settings'">&#9881; Settings</button>
-            <button id="refresh-scan-btn">&#8635; Refresh Scan</button>
-        </div>
 
         <header>
             <h1>Kalshi Markets Report</h1>
@@ -625,7 +571,7 @@ const reportTemplate = `<!DOCTYPE html>
                         </td>
                         <td><span class="side {{if eq .Side "YES"}}side-yes{{else}}side-no{{end}}">{{.Side}}</span></td>
                         <td>{{.Contracts}}</td>
-                        <td>{{.PurchasePrice}}</td>
+                        <td><input type="number" class="portfolio-price-input" value="{{printf "%.1f" .AvgPriceCents}}" step="0.1" data-contracts="{{.Contracts}}" data-bid="{{printf "%.4f" .BidPrice}}">¢</td>
                         <td>{{.CurrentAskCents}}</td>
                         <td>{{.CurrentBidCents}}</td>
                         <td>{{.Exposure}}</td>
@@ -688,7 +634,7 @@ const reportTemplate = `<!DOCTYPE html>
                         <td><span class="side {{if eq .Side "YES"}}side-yes{{else}}side-no{{end}}">{{.Side}}</span></td>
                         <td>{{.Contracts}}</td>
                         <td data-value="{{.DateUnix}}">{{.Date}}</td>
-                        <td>{{.CostStr}}</td>
+                        <td>$<input type="number" class="txn-price-input" value="{{printf "%.2f" .CostDollars}}" step="0.01" data-contracts="{{.Contracts}}" data-revenue="{{printf "%.4f" .RevenueDollars}}" data-fees="{{printf "%.4f" .FeeDollars}}"></td>
                         <td>{{.RevenueStr}}</td>
                         <td class="{{if ge .GainLoss 0.0}}kelly-positive{{else}}pnl-negative{{end}}">{{.GainLossStr}}</td>
                         <td>{{.FeesStr}}</td>
@@ -1195,6 +1141,157 @@ const reportTemplate = `<!DOCTYPE html>
             updateKellyPanel();
         });
 
+        // Portfolio purchase price editing -> recalc Unrealized P&L
+        document.addEventListener('input', function(e) {
+            if (!e.target.classList.contains('portfolio-price-input')) return;
+            var newPriceCents = parseFloat(e.target.value);
+            if (isNaN(newPriceCents)) return;
+            var contracts = parseInt(e.target.dataset.contracts, 10) || 0;
+            var bidPrice = parseFloat(e.target.dataset.bid) || 0;
+            var unrealizedPnl = (bidPrice - newPriceCents / 100.0) * contracts;
+            // The Unrealized P&L cell is the 8th td (0-indexed: 7)
+            var row = e.target.closest('tr');
+            if (!row) return;
+            var pnlCell = row.querySelectorAll('td')[7];
+            if (!pnlCell) return;
+            pnlCell.textContent = '$' + unrealizedPnl.toFixed(2);
+            pnlCell.className = unrealizedPnl >= 0 ? 'kelly-positive' : 'pnl-negative';
+        });
+
+        // Transaction purchase price editing -> recalc Gain/Loss and Tax
+        document.addEventListener('input', function(e) {
+            if (!e.target.classList.contains('txn-price-input')) return;
+            var newCostDollars = parseFloat(e.target.value);
+            if (isNaN(newCostDollars)) return;
+            var revenueDollars = parseFloat(e.target.dataset.revenue) || 0;
+            var feeDollars = parseFloat(e.target.dataset.fees) || 0;
+            var gainLoss = revenueDollars - newCostDollars - feeDollars;
+            var tax = gainLoss > 0 ? gainLoss * 0.21 : 0;
+            var row = e.target.closest('tr');
+            if (!row) return;
+            var cells = row.querySelectorAll('td');
+            // Gain/Loss is 8th td (index 7), Tax is 10th td (index 9)
+            if (cells[7]) {
+                cells[7].textContent = '$' + gainLoss.toFixed(2);
+                cells[7].className = gainLoss >= 0 ? 'kelly-positive' : 'pnl-negative';
+            }
+            if (cells[9]) {
+                cells[9].textContent = '$' + tax.toFixed(2);
+            }
+            // Recalculate summary totals
+            var totalGL = 0, totalTax = 0;
+            document.querySelectorAll('#transactions-table tbody tr').forEach(function(r) {
+                var tds = r.querySelectorAll('td');
+                if (tds[7]) totalGL += parseFloat(tds[7].textContent.replace('$','')) || 0;
+                if (tds[9]) totalTax += parseFloat(tds[9].textContent.replace('$','')) || 0;
+            });
+            var summaryCards = document.querySelectorAll('#transactions-section .portfolio-stat-value');
+            if (summaryCards[1]) summaryCards[1].textContent = '$' + totalGL.toFixed(2);
+            if (summaryCards[3]) summaryCards[3].textContent = '$' + totalTax.toFixed(2);
+        });
+
+        // ===== Auto-save overrides to database =====
+        var saveTimers = {};
+        function saveOverride(ticker, side, field, value) {
+            var key = ticker + '|' + side + '|' + field;
+            clearTimeout(saveTimers[key]);
+            saveTimers[key] = setTimeout(function() {
+                fetch('/api/kalshi/overrides', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ticker: ticker, side: side, field: field, value: value})
+                });
+            }, 500);
+        }
+
+        // Auto-save portfolio edge changes
+        document.addEventListener('input', function(e) {
+            if (!e.target.classList.contains('portfolio-edge-input')) return;
+            var row = e.target.closest('tr');
+            if (!row) return;
+            var cents = parseFloat(e.target.value);
+            if (isNaN(cents)) return;
+            saveOverride(row.dataset.ticker || '', row.dataset.side || '', 'edge', cents);
+        });
+
+        // Auto-save portfolio purchase price changes
+        document.addEventListener('input', function(e) {
+            if (!e.target.classList.contains('portfolio-price-input')) return;
+            var row = e.target.closest('tr');
+            if (!row) return;
+            var cents = parseFloat(e.target.value);
+            if (isNaN(cents)) return;
+            saveOverride(row.dataset.ticker || '', row.dataset.side || '', 'portfolio_price', cents);
+        });
+
+        // Auto-save transaction purchase price changes
+        document.addEventListener('input', function(e) {
+            if (!e.target.classList.contains('txn-price-input')) return;
+            var row = e.target.closest('tr');
+            if (!row) return;
+            var dollars = parseFloat(e.target.value);
+            if (isNaN(dollars)) return;
+            // Get ticker from the subtitle div in column 0
+            var subtitleEl = row.querySelector('.market-subtitle');
+            var ticker = subtitleEl ? subtitleEl.textContent.trim() : '';
+            // Get side from the second td's span text
+            var sideEl = row.querySelectorAll('td')[2];
+            var side = sideEl ? sideEl.textContent.trim() : '';
+            saveOverride(ticker, side, 'txn_price', dollars);
+        });
+
+        // ===== Load saved overrides on page load =====
+        (function loadOverrides() {
+            fetch('/api/kalshi/overrides')
+                .then(function(res) { return res.json(); })
+                .then(function(overrides) {
+                    if (!overrides || typeof overrides !== 'object') return;
+
+                    // Apply portfolio overrides
+                    document.querySelectorAll('#portfolio-body tr').forEach(function(row) {
+                        var ticker = row.dataset.ticker || '';
+                        var side = row.dataset.side || '';
+
+                        // Edge override
+                        var edgeKey = ticker + '|' + side + '|edge';
+                        if (overrides[edgeKey] !== undefined) {
+                            var edgeInput = row.querySelector('.portfolio-edge-input');
+                            if (edgeInput) {
+                                edgeInput.value = overrides[edgeKey].toFixed(1);
+                                edgeInput.dispatchEvent(new Event('input', {bubbles: true}));
+                            }
+                        }
+
+                        // Purchase price override
+                        var priceKey = ticker + '|' + side + '|portfolio_price';
+                        if (overrides[priceKey] !== undefined) {
+                            var priceInput = row.querySelector('.portfolio-price-input');
+                            if (priceInput) {
+                                priceInput.value = overrides[priceKey].toFixed(1);
+                                priceInput.dispatchEvent(new Event('input', {bubbles: true}));
+                            }
+                        }
+                    });
+
+                    // Apply transaction overrides
+                    document.querySelectorAll('#transactions-table tbody tr').forEach(function(row) {
+                        var subtitleEl = row.querySelector('.market-subtitle');
+                        var ticker = subtitleEl ? subtitleEl.textContent.trim() : '';
+                        var sideEl = row.querySelectorAll('td')[2];
+                        var side = sideEl ? sideEl.textContent.trim() : '';
+                        var txnKey = ticker + '|' + side + '|txn_price';
+                        if (overrides[txnKey] !== undefined) {
+                            var txnInput = row.querySelector('.txn-price-input');
+                            if (txnInput) {
+                                txnInput.value = overrides[txnKey].toFixed(2);
+                                txnInput.dispatchEvent(new Event('input', {bubbles: true}));
+                            }
+                        }
+                    });
+                })
+                .catch(function() { /* silently ignore */ });
+        })();
+
         // ===== Checkbox-to-Portfolio: add/remove theoretical positions =====
         function addToPortfolio(market, skipRecalc) {
             var tbody = document.getElementById('portfolio-body');
@@ -1368,56 +1465,6 @@ const reportTemplate = `<!DOCTYPE html>
         // Initial portfolio recalculation (scale if existing positions already exceed 100%)
         recalcPortfolio();
 
-        // ===== Hamburger menu =====
-        var hamburgerBtn = document.getElementById('hamburger-btn');
-        var menuDropdown = document.getElementById('menu-dropdown');
-
-        if (hamburgerBtn) {
-            hamburgerBtn.addEventListener('click', function(e) {
-                e.stopPropagation();
-                menuDropdown.classList.toggle('visible');
-            });
-        }
-
-        // Close menu when clicking outside
-        document.addEventListener('click', function(e) {
-            if (menuDropdown && !menuDropdown.contains(e.target) && e.target !== hamburgerBtn) {
-                menuDropdown.classList.remove('visible');
-            }
-        });
-
-        // Refresh scan button
-        var refreshScanBtn = document.getElementById('refresh-scan-btn');
-        if (refreshScanBtn) {
-            refreshScanBtn.addEventListener('click', function() {
-                menuDropdown.classList.remove('visible');
-                showScanToast('Starting scan...');
-                fetch('/api/kalshi/refresh', { method: 'POST' })
-                    .then(function(r) { return r.json(); })
-                    .then(function() {
-                        showScanToast('Scan started. Page will reload shortly...');
-                        setTimeout(function() { location.reload(); }, 8000);
-                    })
-                    .catch(function() {
-                        showScanToast('Failed to start scan.');
-                    });
-            });
-        }
-
-        // Toast notification helper
-        function showScanToast(msg) {
-            var existing = document.querySelector('.scan-toast');
-            if (existing) existing.remove();
-            var toast = document.createElement('div');
-            toast.className = 'scan-toast';
-            toast.textContent = msg;
-            document.body.appendChild(toast);
-            requestAnimationFrame(function() { toast.classList.add('visible'); });
-            setTimeout(function() {
-                toast.classList.remove('visible');
-                setTimeout(function() { toast.remove(); }, 300);
-            }, 4000);
-        }
     })();
     </script>
 </body>
@@ -1445,6 +1492,7 @@ type PortfolioPositionView struct {
 	Side            string
 	Contracts       int
 	PurchasePrice   string
+	AvgPriceCents   float64 // Raw numeric value for editable input
 	CurrentAskCents string
 	CurrentBidCents string
 	Exposure        string
@@ -1475,19 +1523,22 @@ type positionJSON struct {
 
 // TransactionView contains a settlement or sale formatted for the report.
 type TransactionView struct {
-	Ticker      string
-	Title       string
-	Type        string // "Settlement" or "Sale"
-	Side        string // "YES" or "NO"
-	Contracts   int
-	Date        string
-	DateUnix    int64
-	CostStr     string  // Purchase price display
-	RevenueStr  string  // Settlement/sale price display
-	GainLoss    float64 // For conditional coloring
-	GainLossStr string
-	FeesStr     string
-	TaxStr      string
+	Ticker         string
+	Title          string
+	Type           string // "Settlement" or "Sale"
+	Side           string // "YES" or "NO"
+	Contracts      int
+	Date           string
+	DateUnix       int64
+	CostStr        string  // Purchase price display
+	CostDollars    float64 // Raw cost in dollars for editable input
+	RevenueStr     string  // Settlement/sale price display
+	RevenueDollars float64 // Raw revenue in dollars for JS recalc
+	GainLoss       float64 // For conditional coloring
+	GainLossStr    string
+	FeesStr        string
+	FeeDollars     float64 // Raw fee in dollars for JS recalc
+	TaxStr         string
 }
 
 // CategoryView represents a category for the settings dialog.
@@ -1671,6 +1722,7 @@ func GenerateHTMLReport(
 				Side:            side,
 				Contracts:       contracts,
 				PurchasePrice:   purchasePrice,
+				AvgPriceCents:   avgPriceDollars * 100,
 				CurrentAskCents: currentAskCents,
 				CurrentBidCents: currentBidCents,
 				Exposure:        exposure,
@@ -1746,19 +1798,22 @@ func GenerateHTMLReport(
 			}
 
 			data.Transactions = append(data.Transactions, TransactionView{
-				Ticker:      s.Ticker,
-				Title:       title,
-				Type:        "Settlement",
-				Side:        side,
-				Contracts:   contracts,
-				Date:        parseTime(s.SettledTime).Format("Jan 2, 2006"),
-				DateUnix:    parseTime(s.SettledTime).Unix(),
-				CostStr:     fmt.Sprintf("$%.2f", costDollars),
-				RevenueStr:  fmt.Sprintf("$%.2f", revenueDollars),
-				GainLoss:    gainLoss,
-				GainLossStr: fmt.Sprintf("$%.2f", gainLoss),
-				FeesStr:     fmt.Sprintf("$%.2f", feeDollars),
-				TaxStr:      fmt.Sprintf("$%.2f", tax),
+				Ticker:         s.Ticker,
+				Title:          title,
+				Type:           "Settlement",
+				Side:           side,
+				Contracts:      contracts,
+				Date:           parseTime(s.SettledTime).Format("Jan 2, 2006"),
+				DateUnix:       parseTime(s.SettledTime).Unix(),
+				CostStr:        fmt.Sprintf("$%.2f", costDollars),
+				CostDollars:    costDollars,
+				RevenueStr:     fmt.Sprintf("$%.2f", revenueDollars),
+				RevenueDollars: revenueDollars,
+				GainLoss:       gainLoss,
+				GainLossStr:    fmt.Sprintf("$%.2f", gainLoss),
+				FeesStr:        fmt.Sprintf("$%.2f", feeDollars),
+				FeeDollars:     feeDollars,
+				TaxStr:         fmt.Sprintf("$%.2f", tax),
 			})
 
 			data.TotalGainLoss += gainLoss
@@ -1800,19 +1855,22 @@ func GenerateHTMLReport(
 			}
 
 			data.Transactions = append(data.Transactions, TransactionView{
-				Ticker:      f.Ticker,
-				Title:       title,
-				Type:        "Sale",
-				Side:        side,
-				Contracts:   f.Count,
-				Date:        parseTime(f.CreatedTime).Format("Jan 2, 2006"),
-				DateUnix:    parseTime(f.CreatedTime).Unix(),
-				CostStr:     "—",
-				RevenueStr:  fmt.Sprintf("$%.2f", revenueDollars),
-				GainLoss:    gainLoss,
-				GainLossStr: fmt.Sprintf("$%.2f", gainLoss),
-				FeesStr:     fmt.Sprintf("$%.2f", feeDollars),
-				TaxStr:      fmt.Sprintf("$%.2f", tax),
+				Ticker:         f.Ticker,
+				Title:          title,
+				Type:           "Sale",
+				Side:           side,
+				Contracts:      f.Count,
+				Date:           parseTime(f.CreatedTime).Format("Jan 2, 2006"),
+				DateUnix:       parseTime(f.CreatedTime).Unix(),
+				CostStr:        "—",
+				CostDollars:    0,
+				RevenueStr:     fmt.Sprintf("$%.2f", revenueDollars),
+				RevenueDollars: revenueDollars,
+				GainLoss:       gainLoss,
+				GainLossStr:    fmt.Sprintf("$%.2f", gainLoss),
+				FeesStr:        fmt.Sprintf("$%.2f", feeDollars),
+				FeeDollars:     feeDollars,
+				TaxStr:         fmt.Sprintf("$%.2f", tax),
 			})
 
 			data.TotalGainLoss += gainLoss
@@ -1954,7 +2012,8 @@ func GenerateHTMLReportString(
 			}
 			data.PortfolioPositions = append(data.PortfolioPositions, PortfolioPositionView{
 				Ticker: p.Ticker, Title: ep.Title, Side: side, Contracts: contracts,
-				PurchasePrice: purchasePrice, CurrentAskCents: currentAskCents,
+				PurchasePrice: purchasePrice, AvgPriceCents: avgPriceDollars * 100,
+				CurrentAskCents: currentAskCents,
 				CurrentBidCents: currentBidCents, Exposure: exposure,
 				UnrealizedPnL: unrealizedStr, ExpirationStr: ep.ExpirationStr,
 				ExpirationUnix: ep.ExpirationUnix, EdgeStr: edgeStr,
@@ -2008,11 +2067,13 @@ func GenerateHTMLReportString(
 			data.Transactions = append(data.Transactions, TransactionView{
 				Ticker: s.Ticker, Title: title, Type: "Settlement", Side: side,
 				Contracts: contracts, Date: parseTime(s.SettledTime).Format("Jan 2, 2006"),
-				DateUnix:   parseTime(s.SettledTime).Unix(),
-				CostStr:    fmt.Sprintf("$%.2f", costDollars),
-				RevenueStr: fmt.Sprintf("$%.2f", revenueDollars),
-				GainLoss:   gainLoss, GainLossStr: fmt.Sprintf("$%.2f", gainLoss),
-				FeesStr: fmt.Sprintf("$%.2f", feeDollars), TaxStr: fmt.Sprintf("$%.2f", tax),
+				DateUnix:       parseTime(s.SettledTime).Unix(),
+				CostStr:        fmt.Sprintf("$%.2f", costDollars),
+				CostDollars:    costDollars,
+				RevenueStr:     fmt.Sprintf("$%.2f", revenueDollars),
+				RevenueDollars: revenueDollars,
+				GainLoss:       gainLoss, GainLossStr: fmt.Sprintf("$%.2f", gainLoss),
+				FeesStr: fmt.Sprintf("$%.2f", feeDollars), FeeDollars: feeDollars, TaxStr: fmt.Sprintf("$%.2f", tax),
 			})
 			data.TotalGainLoss += gainLoss
 			data.TotalFees += feeDollars
@@ -2045,13 +2106,16 @@ func GenerateHTMLReportString(
 			data.Transactions = append(data.Transactions, TransactionView{
 				Ticker: f.Ticker, Title: title, Type: "Sale", Side: side,
 				Contracts: f.Count, Date: parseTime(f.CreatedTime).Format("Jan 2, 2006"),
-				DateUnix:    parseTime(f.CreatedTime).Unix(),
-				CostStr:     "—",
-				RevenueStr:  fmt.Sprintf("$%.2f", revenueDollars),
-				GainLoss:    gainLoss,
-				GainLossStr: fmt.Sprintf("$%.2f", gainLoss),
-				FeesStr:     fmt.Sprintf("$%.2f", feeDollars),
-				TaxStr:      fmt.Sprintf("$%.2f", tax),
+				DateUnix:       parseTime(f.CreatedTime).Unix(),
+				CostStr:        "—",
+				CostDollars:    0,
+				RevenueStr:     fmt.Sprintf("$%.2f", revenueDollars),
+				RevenueDollars: revenueDollars,
+				GainLoss:       gainLoss,
+				GainLossStr:    fmt.Sprintf("$%.2f", gainLoss),
+				FeesStr:        fmt.Sprintf("$%.2f", feeDollars),
+				FeeDollars:     feeDollars,
+				TaxStr:         fmt.Sprintf("$%.2f", tax),
 			})
 			data.TotalGainLoss += gainLoss
 			data.TotalFees += feeDollars

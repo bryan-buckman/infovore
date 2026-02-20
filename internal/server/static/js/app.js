@@ -1,7 +1,5 @@
 // Infovore App JS
 (function () {
-    const menuBtn = document.getElementById('menuBtn');
-    const readerMenuDropdown = document.getElementById('readerMenuDropdown');
     const refreshBtn = document.getElementById('refreshBtn');
     const toast = document.getElementById('toast');
     const toastMessage = document.getElementById('toastMessage');
@@ -41,22 +39,18 @@
     const submitAddFolder = document.getElementById('submitAddFolder');
     const addFolderSettingsBtn = document.getElementById('addFolderSettingsBtn');
 
+    // Folder picker modal
+    const addToFoldersBtn = document.getElementById('addToFoldersBtn');
+    const folderPickerModal = document.getElementById('folderPickerModal');
+    const closeFolderPicker = document.getElementById('closeFolderPicker');
+    const folderPickerCancel = document.getElementById('folderPickerCancel');
+    const folderPickerSave = document.getElementById('folderPickerSave');
+    const folderCheckboxes = document.getElementById('folderCheckboxes');
+
     // Sidebar toggle (mobile)
     if (sidebarToggle) sidebarToggle.onclick = () => sidebar.classList.toggle('open');
 
-    // Hamburger menu toggle
-    if (menuBtn && readerMenuDropdown) {
-        menuBtn.onclick = (e) => {
-            e.stopPropagation();
-            const isVisible = readerMenuDropdown.style.display === 'block';
-            readerMenuDropdown.style.display = isVisible ? 'none' : 'block';
-        };
-        document.addEventListener('click', (e) => {
-            if (!readerMenuDropdown.contains(e.target) && e.target !== menuBtn) {
-                readerMenuDropdown.style.display = 'none';
-            }
-        });
-    }
+
 
     // Collapsible folders - use arrow click area only, not the whole link
     const FOLDER_STATE_KEY = 'infovore_folder_state';
@@ -139,6 +133,77 @@
             hideAllContextMenus();
         }
     });
+
+    // Add to Folders
+    if (addToFoldersBtn) {
+        addToFoldersBtn.onclick = async () => {
+            if (!contextFeedId) return;
+            const feedId = contextFeedId;
+            hideAllContextMenus();
+
+            try {
+                const res = await fetch(`/api/feed/${feedId}/folders`);
+                const data = await res.json();
+                const currentIDs = data.folder_ids || [];
+                const allFolders = data.all_folders || [];
+
+                folderCheckboxes.innerHTML = '';
+                if (allFolders.length === 0) {
+                    folderCheckboxes.innerHTML = '<p style="color:var(--text-muted)">No folders yet. Create a folder first.</p>';
+                } else {
+                    allFolders.forEach(f => {
+                        const label = document.createElement('label');
+                        label.className = 'folder-checkbox-label';
+                        const cb = document.createElement('input');
+                        cb.type = 'checkbox';
+                        cb.value = f.id;
+                        cb.checked = currentIDs.includes(f.id);
+                        label.appendChild(cb);
+                        label.appendChild(document.createTextNode(f.name));
+                        folderCheckboxes.appendChild(label);
+                    });
+                }
+
+                folderPickerModal.classList.add('active');
+                folderPickerModal._feedId = feedId;
+            } catch (err) {
+                showToast('Failed to load folders');
+            }
+        };
+    }
+
+    // Folder picker close/cancel
+    if (closeFolderPicker) closeFolderPicker.onclick = () => folderPickerModal.classList.remove('active');
+    if (folderPickerCancel) folderPickerCancel.onclick = () => folderPickerModal.classList.remove('active');
+
+    // Folder picker save
+    if (folderPickerSave) {
+        folderPickerSave.onclick = async () => {
+            const feedId = folderPickerModal._feedId;
+            if (!feedId) return;
+
+            const checkedIDs = Array.from(folderCheckboxes.querySelectorAll('input[type="checkbox"]:checked'))
+                .map(cb => parseInt(cb.value, 10));
+
+            try {
+                const res = await fetch(`/api/feed/${feedId}/folders`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ folder_ids: checkedIDs })
+                });
+                if (res.ok) {
+                    showToast('Folder assignments updated');
+                    setTimeout(() => location.reload(), 1000);
+                } else {
+                    showToast('Failed to update folders');
+                }
+            } catch (err) {
+                showToast('Failed to save folder assignments');
+            }
+
+            folderPickerModal.classList.remove('active');
+        };
+    }
 
     // Update feed
     if (updateFeedBtn) {
@@ -395,15 +460,47 @@
         setTimeout(() => { toast.classList.remove('active'); }, duration);
     }
 
-    // Refresh feeds
+    // Refresh feeds (async with progress polling)
     if (refreshBtn) refreshBtn.onclick = async () => {
         refreshBtn.disabled = true;
-        showToast('Updating feeds... This may take a while.', 60000);
+        showToast('Starting feed refresh...', 120000);
+
+        // Notify parent shell to show progress bar
+        try { window.parent.postMessage({ type: 'rss-refresh-started' }, '*'); } catch (e) { }
+
         try {
-            const res = await fetch('/api/refresh', { method: 'POST' });
-            const data = await res.json();
-            showToast(`Fetched ${data.new_items} new items from ${data.feeds} feeds`);
-            setTimeout(() => location.reload(), 1500);
+            const res = await fetch('/api/rss/refresh', { method: 'POST' });
+            if (res.status === 409) {
+                showToast('Feed refresh already running...', 60000);
+            } else if (!res.ok) {
+                showToast('Failed to start refresh');
+                refreshBtn.disabled = false;
+                return;
+            }
+
+            // Poll for progress
+            const pollInterval = setInterval(async () => {
+                try {
+                    const statusRes = await fetch('/api/rss/status');
+                    const status = await statusRes.json();
+                    if (status.refreshing) {
+                        const pct = status.feeds_total > 0 ? Math.round((status.feeds_done / status.feeds_total) * 100) : 0;
+                        showToast(`Refreshing: ${status.feeds_done}/${status.feeds_total} feeds (${status.new_items} new) — ${pct}%`, 120000);
+                    } else {
+                        clearInterval(pollInterval);
+                        if (status.last_error) {
+                            showToast(`Refresh error: ${status.last_error}`);
+                        } else {
+                            showToast(`Done! ${status.new_items} new items from ${status.feeds_total} feeds`);
+                        }
+                        setTimeout(() => location.reload(), 1500);
+                    }
+                } catch (e) {
+                    clearInterval(pollInterval);
+                    showToast('Lost connection to server');
+                    refreshBtn.disabled = false;
+                }
+            }, 2000);
         } catch (e) {
             showToast('Refresh failed');
             refreshBtn.disabled = false;

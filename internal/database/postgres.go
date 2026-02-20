@@ -114,12 +114,29 @@ func (db *PostgresStore) migrate() error {
 	INSERT INTO settings (key, value) VALUES ('kalshi_categories', 'Politics') ON CONFLICT (key) DO NOTHING;
 	INSERT INTO settings (key, value) VALUES ('kalshi_scan_interval_hours', '6') ON CONFLICT (key) DO NOTHING;
 
+	-- Feed-to-folder many-to-many for multi-folder support
+	CREATE TABLE IF NOT EXISTS feed_folders (
+		feed_id BIGINT NOT NULL REFERENCES feeds(id) ON DELETE CASCADE,
+		folder_id BIGINT NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+		PRIMARY KEY (feed_id, folder_id)
+	);
+
 	-- Create indexes for better query performance
 	CREATE INDEX IF NOT EXISTS idx_items_feed_id ON items(feed_id);
 	CREATE INDEX IF NOT EXISTS idx_items_published_at ON items(published_at DESC);
 	CREATE INDEX IF NOT EXISTS idx_feeds_folder_id ON feeds(folder_id);
 	CREATE INDEX IF NOT EXISTS idx_items_is_read ON items(is_read);
+	CREATE INDEX IF NOT EXISTS idx_items_feed_is_read ON items(feed_id, is_read);
 	CREATE INDEX IF NOT EXISTS idx_kalshi_reports_created_at ON kalshi_reports(created_at DESC);
+
+	-- Kalshi overrides for user-editable values (edge, purchase prices)
+	CREATE TABLE IF NOT EXISTS kalshi_overrides (
+		ticker TEXT NOT NULL,
+		side TEXT NOT NULL DEFAULT '',
+		field TEXT NOT NULL,
+		value REAL NOT NULL,
+		PRIMARY KEY (ticker, side, field)
+	);
 	`
 	_, err := db.conn.Exec(schema)
 	return err
@@ -223,7 +240,20 @@ func (db *PostgresStore) GetUnfiledFeeds() ([]model.Feed, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	return scanFeedsSimple(rows)
+	feeds, err := scanFeedsSimple(rows)
+	if err != nil {
+		return nil, err
+	}
+
+	// Populate unread counts
+	counts, err := db.GetUnreadCounts()
+	if err != nil {
+		return feeds, nil // return feeds without counts on error
+	}
+	for i := range feeds {
+		feeds[i].UnreadCount = counts[feeds[i].ID]
+	}
+	return feeds, nil
 }
 
 func (db *PostgresStore) GetFoldersWithFeeds() ([]model.FolderWithFeeds, error) {
@@ -232,15 +262,73 @@ func (db *PostgresStore) GetFoldersWithFeeds() ([]model.FolderWithFeeds, error) 
 		return nil, err
 	}
 
+	// Fetch all feeds that belong to a folder in one query instead of N+1.
+	rows, err := db.conn.Query("SELECT id, folder_id, title, url, icon_url, last_fetched, last_error FROM feeds WHERE folder_id IS NOT NULL ORDER BY title")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	allFeeds, err := scanFeedsSimple(rows)
+	if err != nil {
+		return nil, err
+	}
+
+	// Fetch cross-folder assignments from feed_folders
+	crossRows, err := db.conn.Query(`
+		SELECT ff.folder_id, f.id, f.folder_id, f.title, f.url, f.icon_url, f.last_fetched, f.last_error
+		FROM feed_folders ff
+		JOIN feeds f ON ff.feed_id = f.id
+		ORDER BY f.title`)
+	if err == nil {
+		defer crossRows.Close()
+		for crossRows.Next() {
+			var targetFolderID int64
+			var f model.Feed
+			var lastFetched sql.NullTime
+			var lastError sql.NullString
+			if err := crossRows.Scan(&targetFolderID, &f.ID, &f.FolderID, &f.Title, &f.URL, &f.IconURL, &lastFetched, &lastError); err != nil {
+				break
+			}
+			if lastFetched.Valid {
+				f.LastFetched = lastFetched.Time
+			}
+			if lastError.Valid {
+				f.LastError = lastError.String
+			}
+			allFeeds = append(allFeeds, model.Feed{
+				ID: f.ID, FolderID: &targetFolderID, Title: f.Title,
+				URL: f.URL, IconURL: f.IconURL, LastFetched: f.LastFetched,
+				LastError: f.LastError,
+			})
+		}
+	}
+
+	// Populate unread counts
+	counts, _ := db.GetUnreadCounts()
+	for i := range allFeeds {
+		allFeeds[i].UnreadCount = counts[allFeeds[i].ID]
+	}
+
+	// Group feeds by folder ID.
+	feedsByFolder := make(map[int64][]model.Feed)
+	for _, f := range allFeeds {
+		if f.FolderID != nil {
+			feedsByFolder[*f.FolderID] = append(feedsByFolder[*f.FolderID], f)
+		}
+	}
+
 	var result []model.FolderWithFeeds
 	for _, folder := range folders {
-		feeds, err := db.GetFeedsByFolderID(folder.ID)
-		if err != nil {
-			return nil, err
+		feeds := feedsByFolder[folder.ID]
+		folderUnread := 0
+		for _, f := range feeds {
+			folderUnread += f.UnreadCount
 		}
 		result = append(result, model.FolderWithFeeds{
-			Folder: folder,
-			Feeds:  feeds,
+			Folder:      folder,
+			Feeds:       feeds,
+			UnreadCount: folderUnread,
 		})
 	}
 	return result, nil
@@ -305,6 +393,69 @@ func (db *PostgresStore) MoveFeedToFolder(feedID int64, folderID *int64) error {
 	return err
 }
 
+// --- Multi-folder Methods ---
+
+// GetUnreadCounts returns a map of feed_id -> unread item count.
+func (db *PostgresStore) GetUnreadCounts() (map[int64]int, error) {
+	rows, err := db.conn.Query("SELECT feed_id, COUNT(*) FROM items WHERE is_read = FALSE GROUP BY feed_id")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	counts := make(map[int64]int)
+	for rows.Next() {
+		var feedID int64
+		var count int
+		if err := rows.Scan(&feedID, &count); err != nil {
+			return nil, err
+		}
+		counts[feedID] = count
+	}
+	return counts, rows.Err()
+}
+
+// AddFeedToFolder adds a feed to an additional folder via feed_folders.
+func (db *PostgresStore) AddFeedToFolder(feedID, folderID int64) error {
+	_, err := db.conn.Exec("INSERT INTO feed_folders (feed_id, folder_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", feedID, folderID)
+	return err
+}
+
+// RemoveFeedFromFolder removes a feed from an additional folder.
+func (db *PostgresStore) RemoveFeedFromFolder(feedID, folderID int64) error {
+	_, err := db.conn.Exec("DELETE FROM feed_folders WHERE feed_id = $1 AND folder_id = $2", feedID, folderID)
+	return err
+}
+
+// GetFolderIDsForFeed returns all folder IDs a feed belongs to (primary + additional).
+func (db *PostgresStore) GetFolderIDsForFeed(feedID int64) ([]int64, error) {
+	// Get primary folder
+	var primaryFolderID sql.NullInt64
+	err := db.conn.QueryRow("SELECT folder_id FROM feeds WHERE id = $1", feedID).Scan(&primaryFolderID)
+	if err != nil {
+		return nil, err
+	}
+
+	var ids []int64
+	if primaryFolderID.Valid {
+		ids = append(ids, primaryFolderID.Int64)
+	}
+
+	// Get additional folders
+	rows, err := db.conn.Query("SELECT folder_id FROM feed_folders WHERE feed_id = $1", feedID)
+	if err != nil {
+		return ids, nil
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var fid int64
+		if err := rows.Scan(&fid); err != nil {
+			continue
+		}
+		ids = append(ids, fid)
+	}
+	return ids, nil
+}
+
 // --- Item Methods ---
 
 func (db *PostgresStore) AddItem(item *model.Item) (int64, bool, error) {
@@ -344,7 +495,7 @@ func (db *PostgresStore) GetAllItems(onlyUnread bool) ([]model.Item, error) {
 	if onlyUnread {
 		query += " WHERE is_read = FALSE"
 	}
-	query += " ORDER BY published_at DESC"
+	query += " ORDER BY published_at DESC LIMIT 200"
 	rows, err := db.conn.Query(query)
 	if err != nil {
 		return nil, err
@@ -571,4 +722,35 @@ func (db *PostgresStore) GetKalshiScanLog(limit int) ([]ScanLogEntry, error) {
 		entries = append(entries, e)
 	}
 	return entries, rows.Err()
+}
+
+// --- Kalshi Override Methods ---
+
+// SetKalshiOverride upserts a user-editable override value.
+func (db *PostgresStore) SetKalshiOverride(ticker, side, field string, value float64) error {
+	_, err := db.conn.Exec(`
+		INSERT INTO kalshi_overrides (ticker, side, field, value)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (ticker, side, field) DO UPDATE SET value = $4`,
+		ticker, side, field, value)
+	return err
+}
+
+// GetKalshiOverrides returns all overrides as a map keyed by "ticker|side|field".
+func (db *PostgresStore) GetKalshiOverrides() (map[string]float64, error) {
+	rows, err := db.conn.Query("SELECT ticker, side, field, value FROM kalshi_overrides")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make(map[string]float64)
+	for rows.Next() {
+		var ticker, side, field string
+		var value float64
+		if err := rows.Scan(&ticker, &side, &field, &value); err != nil {
+			return nil, err
+		}
+		result[ticker+"|"+side+"|"+field] = value
+	}
+	return result, rows.Err()
 }
