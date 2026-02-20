@@ -38,6 +38,8 @@ Tables are created automatically on first run. The schema includes:
 | `settings` | Key-value application settings |
 | `kalshi_reports` | Stored Kalshi market scan HTML reports (last 5 kept) |
 | `kalshi_scan_log` | Scan execution log entries (last 20 kept) |
+| `feed_folders` | Many-to-many relationship between feeds and folders |
+| `kalshi_overrides` | User-editable market values (edge, prices) |
 
 ## Kalshi Settings
 

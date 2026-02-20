@@ -75,6 +75,11 @@ Open `http://localhost:8080` in your browser.
 2. Enter the RSS/Atom feed URL
 3. Optionally select a folder
 
+### Multi-Folder Feeds
+
+Feeds can belong to multiple folders. Right-click a feed in the sidebar and select **Add to Folders...** to manage its assignments.
+
+
 ### Import from OPML
 
 1. Go to **Settings** (gear icon or `/settings`)
@@ -129,6 +134,15 @@ In Settings, you can also set:
   - Kelly Criterion recommendations
   - Your current portfolio and positions
   - Transaction history for the calendar year
+
+### Editable Reports & Persistence
+
+You can manually override certain values in the report to test scenarios:
+- **Edge**: Edit the edge/Kelly bias in the Portfolio table.
+- **Purchase Price**: Edit the purchase price in both Portfolio and Transactions tables to fix API data gaps.
+
+Changes are **auto-saved** to the database and persist across page reloads and new scans.
+
 
 ### Manual Scan
 

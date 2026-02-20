@@ -99,6 +99,42 @@ Set `folder_id` to `null` to un-file a feed.
 
 ---
 
+### Manage Feed Folders (Multi-Folder)
+
+```
+GET /api/feed/{feedID}/folders
+```
+
+Returns current folder assignments and list of all available folders.
+
+**Response:** `200 OK`
+```json
+{
+  "folder_ids": [1, 3],
+  "all_folders": [
+    { "id": 1, "name": "Tech" },
+    { "id": 2, "name": "News" },
+    { "id": 3, "name": "Comics" }
+  ]
+}
+```
+
+```
+POST /api/feed/{feedID}/folders
+Content-Type: application/json
+```
+
+Updates the folders a feed belongs to (sets the list explicitly).
+
+**Body:**
+```json
+{ "folder_ids": [1, 3] }
+```
+
+**Response:** `200 OK` with `{ "status": "ok" }`
+
+---
+
 ### Add Folder
 
 ```
@@ -344,3 +380,44 @@ Returns the 10 most recent scan log entries.
   }
 ]
 ```
+
+---
+
+### Get Kalshi Overrides
+
+```
+GET /api/kalshi/overrides
+```
+
+Returns all user-defined overrides (edge values, purchase prices) for Kalshi markets.
+
+**Response:** `200 OK`
+```json
+{
+  "KXDH...|YES|edge": 0.05,
+  "KXdh...|YES|portfolio_price": 7500.0
+}
+```
+
+---
+
+### Set Kalshi Override
+
+```
+POST /api/kalshi/overrides
+Content-Type: application/json
+```
+
+Updates a single override value. Keys are typically `ticker|side|field`.
+
+**Body:**
+```json
+{
+  "ticker": "KXDH...",
+  "side": "YES",
+  "field": "edge",
+  "value": 0.05
+}
+```
+
+**Response:** `200 OK` with `{ "status": "ok" }`
